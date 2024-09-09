@@ -375,8 +375,8 @@ _reset_chain() {
   return 0
 }
 
-_iptables_create() {
-  _create_opts="$1"
+_iptables_apply() {
+  _apply_opts="$1"
 
   if "${_ip}" --new-chain "${_CHAIN_NAME}" >/dev/null 2>&1; then
     printf -- 'Create new chain: %s\n' "${_CHAIN_NAME}"
@@ -391,59 +391,59 @@ _iptables_create() {
   fi
 
   _remove_rule INPUT -j "${_CHAIN_NAME}" || {
-    unset _create_opts
+    unset _apply_opts
     return 1
   }
 
   _reset_chain || {
-    unset _create_opts
+    unset _apply_opts
     return 1
   }
 
   _insert_rule_if_not_exists INPUT -j "${_CHAIN_NAME}" || {
-    unset _create_opts
+    unset _apply_opts
     return 1
   }
 
-  unset _create_opts
+  unset _apply_opts
   return 0
 }
 
-_iptables_destroy() {
-  _destroy_opts="$1"
+_iptables_clear() {
+  _clear_opts="$1"
 
   _remove_rule INPUT -j "${_CHAIN_NAME}" || {
-    unset _destroy_opts
+    unset _clear_opts
     return 1
   }
 
   _erase_chain "${_CHAIN_NAME}" || {
-    unset _destroy_opts
+    unset _clear_opts
     return 1
   }
 
   _erase_chain "${_LOGDROP_CHAIN}" || {
-    unset _destroy_opts
+    unset _clear_opts
     return 1
   }
 
-  unset _destroy_opts
+  unset _clear_opts
   return 0
 }
 
 _parse_cmd() {
   # Global __command exists
   if [ -z "$1" ]; then
-    printf -- 'Must specify one of "create" "destroy"\n'
+    printf -- 'Must specify one of "apply" "clear"\n'
     return 1
   fi
 
   case "$1" in
-    "create" | "destroy")
+    "apply" | "clear")
       __command="$1"
       ;;
     *)
-      printf -- 'Must specify one of "create" "destroy": %s\n' "$1"
+      printf -- 'Must specify one of "apply" "clear": %s\n' "$1"
       return 1
       ;;
   esac
@@ -456,21 +456,21 @@ _exec_cmd() {
   _opts="$2"
 
   if [ -z "${_cmd}" ]; then
-    printf -- 'Must specify one of "create" "destroy"\n'
+    printf -- 'Must specify one of "apply" "clear"\n'
 
     unset _cmd
     unset _opts
     return 1
   fi
 
-  if [ "${_cmd}" = "create" ]; then
-    _iptables_create "${_opts}" || {
-      printf -- 'Failed to create iptables rules. Clean up and exit(1)'
-      _iptables_destroy "${_opts}" || return 1
+  if [ "${_cmd}" = "apply" ]; then
+    _iptables_apply "${_opts}" || {
+      printf -- 'Failed to apply iptables rules. Clean up and exit(1)'
+      _iptables_clear "${_opts}" || return 1
       return 1
     }
-  elif [ "${_cmd}" = "destroy" ]; then
-    _iptables_destroy "${_opts}" || return 1
+  elif [ "${_cmd}" = "clear" ]; then
+    _iptables_clear "${_opts}" || return 1
   else
     printf -- 'Unknown execute command: %s (%s)\n' "${_cmd}" "${_opts}"
 

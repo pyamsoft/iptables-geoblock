@@ -6,8 +6,8 @@ After=iptables.service ip6tables.service ebtables.service ipset.service nftables
 
 [Service]
 RemainAfterExit=true
-ExecStart=/bin/sh -c 'iptables-geoblock %I create'
-ExecStop=/bin/sh -c 'iptables-geoblock %I destroy'
+ExecStart=/bin/sh -c 'iptables-geoblock %I apply'
+ExecStop=/bin/sh -c 'iptables-geoblock %I clear'
 
 [Install]
 WantedBy=multi-user.target
