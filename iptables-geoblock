@@ -351,6 +351,11 @@ _reset_chain() {
     return 1
   }
 
+  _prepare_lists || {
+    printf -- 'Failed to prepare IP lists\n'
+    return 1
+  }
+
   _apply_blocklist || {
     printf -- 'Failed applying blocklist to chain %s\n' "${_CHAIN_NAME}"
     return 1
