@@ -1,5 +1,7 @@
 #!/bin/sh
 
+readonly VERSION="0.0.1"
+
 readonly _CHAIN_NAME="POOT_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
 

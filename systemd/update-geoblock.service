@@ -6,4 +6,6 @@ After=network-online.target syslog.target remote-fs.target nss-lookup.target doc
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/sbin/update-geoblock
+# Need oneshot or timer wont restart
+Type=oneshot
+ExecStart=/bin/sh -c 'update-geoblock'

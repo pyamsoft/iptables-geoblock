@@ -1,13 +1,13 @@
 [Unit]
-Description=ip%itables geoblocking
+Description=ip%Itables geoblocking
 Before=network-pre.target
 Wants=network-pre.target
 After=iptables.service ip6tables.service ebtables.service ipset.service nftables.service firewalld.service netfilter-persistent.service
 
 [Service]
 RemainAfterExit=true
-ExecStart=/usr/local/sbin/iptables-geoblock %i create
-ExecStop=/usr/local/sbin/iptables-geoblock %i destroy
+ExecStart=/bin/sh -c 'iptables-geoblock %I create'
+ExecStop=/bin/sh -c 'iptables-geoblock %I destroy'
 
 [Install]
 WantedBy=multi-user.target
