@@ -400,12 +400,22 @@ _iptables_apply() {
     return 1
   }
 
+  _remove_rule FORWARD -j "${_CHAIN_NAME}" || {
+    unset _apply_opts
+    return 1
+  }
+
   _reset_chain || {
     unset _apply_opts
     return 1
   }
 
   _insert_rule_if_not_exists INPUT -j "${_CHAIN_NAME}" || {
+    unset _apply_opts
+    return 1
+  }
+
+  _insert_rule_if_not_exists FORWARD -j "${_CHAIN_NAME}" || {
     unset _apply_opts
     return 1
   }
@@ -418,6 +428,11 @@ _iptables_clear() {
   _clear_opts="$1"
 
   _remove_rule INPUT -j "${_CHAIN_NAME}" || {
+    unset _clear_opts
+    return 1
+  }
+
+  _remove_rule FORWARD -j "${_CHAIN_NAME}" || {
     unset _clear_opts
     return 1
   }
