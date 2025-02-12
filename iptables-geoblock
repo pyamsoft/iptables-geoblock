@@ -59,7 +59,7 @@ _erase_chain() {
   return 0
 }
 
-_prepare_chain() {
+_apply_chain_defaults() {
   # Drop invalid traffic
   _append_rule_if_not_exists "${_CHAIN_NAME}" -m conntrack --ctstate INVALID -j DROP || return 1
 
@@ -107,7 +107,7 @@ _source_configs() {
               _ALL_ACCEPT_IP4="${_ALL_ACCEPT_IP4} ${_i4}"
             fi
             unset _i4
-          done << EOF
+          done <<EOF
 $(grep -v '^#' "${_conf}")
 EOF
           unset _i4
@@ -138,7 +138,7 @@ EOF
               _ALL_BLOCK_IP4="${_ALL_BLOCK_IP4} ${_i4}"
             fi
             unset _i4
-          done << EOF
+          done <<EOF
 $(grep -v '^#' "${_conf}")
 EOF
           unset _i4
@@ -171,7 +171,7 @@ EOF
               _ALL_ACCEPT_IP6="${_ALL_ACCEPT_IP6} ${_i6}"
             fi
             unset _i6
-          done << EOF
+          done <<EOF
 $(grep -v '^#' "${_conf}")
 EOF
           unset _i6
@@ -202,7 +202,7 @@ EOF
               _ALL_BLOCK_IP6="${_ALL_BLOCK_IP6} ${_i6}"
             fi
             unset _i6
-          done << EOF
+          done <<EOF
 $(grep -v '^#' "${_conf}")
 EOF
           unset _i6
@@ -234,7 +234,7 @@ EOF
             _ALL_ACCEPT_COUNTRIES="${_ALL_ACCEPT_COUNTRIES} ${_ic}"
           fi
           unset _ic
-        done << EOF
+        done <<EOF
 $(grep -v '^#' "${_conf}")
 EOF
         unset _ic
@@ -297,7 +297,7 @@ _apply_blocklist() {
   return 0
 }
 
-_apply_allowlist() {
+_apply_allowlist_ips() {
   if [ "${_ip}" = "iptables" ]; then
     # Accept any good IPv4 address
     if [ -n "${_ALL_ACCEPT_IP4}" ]; then
@@ -326,6 +326,10 @@ _apply_allowlist() {
     fi
   fi
 
+  return 0
+}
+
+_apply_allowlist_countries() {
   # Accept any good countries
   if [ -n "${_ALL_ACCEPT_COUNTRIES}" ]; then
     for _c in ${_ALL_ACCEPT_COUNTRIES}; do
@@ -356,18 +360,23 @@ _reset_chain() {
     return 1
   }
 
+  _apply_allowlist_ips || {
+    printf -- 'Failed applying allowlist IPs to chain %s\n' "${_CHAIN_NAME}"
+    return 1
+  }
+
   _apply_blocklist || {
     printf -- 'Failed applying blocklist to chain %s\n' "${_CHAIN_NAME}"
     return 1
   }
 
-  _prepare_chain || {
-    printf -- 'Failed to prepare chain %s\n' "${_CHAIN_NAME}"
+  _apply_chain_defaults || {
+    printf -- 'Failed to apply chain defaults %s\n' "${_CHAIN_NAME}"
     return 1
   }
 
-  _apply_allowlist || {
-    printf -- 'Failed applying allowlist to chain %s\n' "${_CHAIN_NAME}"
+  _apply_allowlist_countries || {
+    printf -- 'Failed applying allowlist countries to chain %s\n' "${_CHAIN_NAME}"
     return 1
   }
 
@@ -459,13 +468,13 @@ _parse_cmd() {
   fi
 
   case "$1" in
-    "apply" | "clear")
-      __command="$1"
-      ;;
-    *)
-      printf -- 'Must specify one of "apply" "clear": %s\n' "$1"
-      return 1
-      ;;
+  "apply" | "clear")
+    __command="$1"
+    ;;
+  *)
+    printf -- 'Must specify one of "apply" "clear": %s\n' "$1"
+    return 1
+    ;;
   esac
 
   return 0
