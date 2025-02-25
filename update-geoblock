@@ -1,6 +1,6 @@
 #!/bin/sh
 
-main () {
+main() {
   if [ "$(id -u)" -ne 0 ]; then
     printf -- 'Must run as root.\n'
     return 1

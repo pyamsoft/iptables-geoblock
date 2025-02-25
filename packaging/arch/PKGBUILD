@@ -34,7 +34,7 @@ url="https://github.com/pyamsoft/iptables-geoblock.git"
 # shellcheck disable=SC2034
 source=("${_gitname}::git+${url}#branch=main")
 # shellcheck disable=SC2034
-sha256sums=('SKIP') 
+sha256sums=('SKIP')
 
 pkgver() {
   # shellcheck disable=SC2154
