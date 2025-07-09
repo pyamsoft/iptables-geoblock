@@ -14,7 +14,7 @@ issue ticket.
 GPLv2
 
 ```
-  Copyright (C) 2024  pyamsoft
+  Copyright (C) 2025 pyamsoft
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License

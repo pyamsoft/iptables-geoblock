@@ -1,6 +1,6 @@
 # The GPLv2 License
 #
-#   Copyright (C) 2024  pyamsoft
+#   Copyright (C) 2025 pyamsoft
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License as published by
@@ -67,6 +67,8 @@ install-systemd:
 	@mkdir -p "$(SYSTEMD_DIR)"
 	@install -Dm 644 "systemd/iptables-geoblock@.service" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
 	@install -Dm 644 "systemd/update-geoblock.service" "$(SYSTEMD_DIR)/update-geoblock.service"
+	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
+	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_DIR)/update-geoblock.service"
 	
 uninstall:
 	@echo "Uninstalling..."
