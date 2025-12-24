@@ -18,7 +18,8 @@
 #   with this program; if not, write to the Free Software Foundation, Inc.,
 #   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-readonly VERSION="0.0.2"
+readonly PROGRAM="iptables-geoblock"
+readonly VERSION="0.0.3"
 
 readonly _CHAIN_NAME="POOT_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
@@ -378,6 +379,11 @@ _reset_chain() {
     return 1
   }
 
+  _apply_chain_defaults || {
+    printf -- 'Failed to apply chain defaults %s\n' "${_CHAIN_NAME}"
+    return 1
+  }
+
   _apply_allowlist_ips || {
     printf -- 'Failed applying allowlist IPs to chain %s\n' "${_CHAIN_NAME}"
     return 1
@@ -385,11 +391,6 @@ _reset_chain() {
 
   _apply_blocklist || {
     printf -- 'Failed applying blocklist to chain %s\n' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  _apply_chain_defaults || {
-    printf -- 'Failed to apply chain defaults %s\n' "${_CHAIN_NAME}"
     return 1
   }
 
@@ -504,6 +505,7 @@ _exec_cmd() {
 
   if [ -z "${_cmd}" ]; then
     printf -- 'Must specify one of "apply" "clear"\n'
+    _usage || return 1
 
     unset _cmd
     unset _opts
@@ -520,6 +522,7 @@ _exec_cmd() {
     _iptables_clear "${_opts}" || return 1
   else
     printf -- 'Unknown execute command: %s (%s)\n' "${_cmd}" "${_opts}"
+    _usage || return 1
 
     unset _cmd
     unset _opts
@@ -557,23 +560,47 @@ _parse_ipv() {
   return 0
 }
 
+_usage() {
+  printf -- '%s\n' "$(
+    cat <<EOF
+USAGE:
+
+${PROGRAM} ${VERSION} <4|6> <apply|clear>
+
+4           operate on IPv4 (iptables)
+6           operate on IPv6 (ip6tables)
+
+apply       Apply geoblocking rules
+clear       Clear geoblocking rules
+EOF
+  )"
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
     printf -- 'Must run as root.\n'
+    _usage || return 1
     return 1
   fi
 
   # We need grep
   if ! command -v "grep" >/dev/null; then
     printf -- 'Must have "grep" installed.\n'
+    _usage || return 1
     return 1
   fi
 
-  _parse_ipv "$1" || return 1
+  _parse_ipv "$1" || {
+    _usage || return 1
+    return 1
+  }
   shift
 
   __command=""
-  _parse_cmd "$1" || return 1
+  _parse_cmd "$1" || {
+    _usage || return 1
+    return 1
+  }
   shift
 
   _exec_cmd "${__command}" "$@" || return 1
