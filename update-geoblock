@@ -18,45 +18,57 @@
 #   with this program; if not, write to the Free Software Foundation, Inc.,
 #   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+readonly PROGRAM="update-geoblock"
+
+_log() {
+  _msg="$1"
+  shift
+
+  printf -- "[%s]: ${_msg}\n" "${PROGRAM}" "$@" || return 1
+
+  unset _msg
+  return 0
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
-    printf -- 'Must run as root.\n'
+    _log 'Must run as root.'
     return 1
   fi
 
   cd /usr/libexec/xtables-addons || {
-    printf -- 'Failed to cd into xtables-addons directory.\n'
+    _log 'Failed to cd into /usr/libexec/xtables-addons directory.'
     return 1
   }
 
   mkdir -p /usr/share/xt_geoip || {
-    printf -- 'Failed to make target xt_geoip directory.\n'
+    _log 'Failed to make target /usr/share/xt_geoip directory.'
     return 1
   }
 
   chmod 755 /usr/share/xt_geoip || {
-    printf -- 'Failed to mark exec target xt_geoip directory.\n'
+    _log 'Failed to mark exec target /usr/share/xt_geoip directory.'
     return 1
   }
 
   # Download (will save as dbip-country-lite.csv)
   ./xt_geoip_dl || {
-    printf -- 'Failed to download latest geoip.\n'
+    _log 'Failed to download latest geoip using xt_geoip_dl'
     return 1
   }
 
   ./xt_geoip_build -D /usr/share/xt_geoip dbip-country-lite.csv || {
-    printf -- 'Failed to convert CSV to GEO-IP\n'
-    printf -- 'On Debian 12, you may need to run: "%s"\n' "apt --mark-auto install libtext-csv-xs-perl"
+    _log 'Failed to convert CSV to GEO-IP using xt_geoip_build'
+    _log 'On Debian 12/13, you may need to run: "%s"\n' "apt --mark-auto install libtext-csv-xs-perl"
     return 1
   }
 
   rm -f dbip-country-lite.csv || {
-    printf -- 'Failed to remove dbip-country-lite CSV\n'
+    _log 'Failed to remove dbip-country-lite.csv now that it has been consumed.'
     return 1
   }
 
-  printf -- 'GeoIP database is updated in /usr/share/xt_geoip\n'
+  _log 'GeoIP database is updated in /usr/share/xt_geoip'
   return 0
 }
 
