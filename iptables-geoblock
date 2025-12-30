@@ -24,7 +24,7 @@ readonly VERSION="0.0.4"
 readonly _CHAIN_NAME="IPTABLES_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
 
-readonly CONFIG_DIR="${CONFIG_DIR}:-/etc/iptables-geoblock/"
+readonly CONFIG_DIR="${CONFIG_DIR:-/etc/iptables-geoblock}"
 
 readonly _ACCEPT_COUNTRIES=""
 
