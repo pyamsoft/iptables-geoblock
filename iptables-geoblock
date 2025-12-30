@@ -19,10 +19,12 @@
 #   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 readonly PROGRAM="iptables-geoblock"
-readonly VERSION="0.0.3"
+readonly VERSION="0.0.4"
 
-readonly _CHAIN_NAME="POOT_GEOBLOCK"
+readonly _CHAIN_NAME="IPTABLES_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
+
+readonly CONFIG_DIR="${CONFIG_DIR}:-/etc/iptables-geoblock/"
 
 readonly _ACCEPT_COUNTRIES=""
 
@@ -32,9 +34,19 @@ readonly _ACCEPT_IP6="::1/128"
 readonly _BLOCK_IP4=""
 readonly _BLOCK_IP6=""
 
+_log() {
+  _msg="$1"
+  shift
+
+  printf -- "[%s]: ${_msg}\n" "${PROGRAM}" "$@" || return 1
+
+  unset _msg
+  return 0
+}
+
 _remove_rule() {
   if "${_ip}" -C "$@" >/dev/null 2>&1; then
-    printf -- 'Remove rule: %s -D %s\n' "${_ip}" "$*"
+    _log 'Remove rule: %s -D %s' "${_ip}" "$*"
     "${_ip}" -D "$@" || return 1
   fi
 
@@ -43,7 +55,7 @@ _remove_rule() {
 
 _append_rule_if_not_exists() {
   if ! "${_ip}" -C "$@" >/dev/null 2>&1; then
-    printf -- 'Appending new rule: %s -I %s\n' "${_ip}" "$*"
+    _log 'Appending new rule: %s -I %s' "${_ip}" "$*"
     "${_ip}" -A "$@" || return 1
   fi
 
@@ -52,7 +64,7 @@ _append_rule_if_not_exists() {
 
 _insert_rule_if_not_exists() {
   if ! "${_ip}" -C "$@" >/dev/null 2>&1; then
-    printf -- 'Inserting new rule: %s -I %s\n' "${_ip}" "$*"
+    _log 'Inserting new rule: %s -I %s' "${_ip}" "$*"
     "${_ip}" -I "$@" || return 1
   fi
 
@@ -62,13 +74,13 @@ _insert_rule_if_not_exists() {
 _erase_chain() {
   _name="$1"
 
-  printf -- 'Zeroing chain: %s %s\n' "${_ip}" "${_name}"
+  _log 'Zeroing chain: %s --zero %s' "${_ip}" "${_name}"
   "${_ip}" --zero "${_name}" || {
     unset _name
     return 1
   }
 
-  printf -- 'Flushing chain: %s %s\n' "${_ip}" "${_name}"
+  _log 'Flushing chain: %s --flush %s' "${_ip}" "${_name}"
   "${_ip}" --flush "${_name}" || {
     unset _name
     return 1
@@ -102,14 +114,13 @@ _nomatch_logdrop() {
 }
 
 _source_configs() {
-  if [ -d "/etc/iptables-geoblock/" ]; then
-
+  if [ -d "${CONFIG_DIR}" ]; then
     if [ "${_ip}" = "iptables" ]; then
       # IPv4 allowlist config
-      for _conf in "/etc/iptables-geoblock"/*".allow.4"; do
+      for _conf in "${CONFIG_DIR}"/*".allow.4"; do
         # If there were no matching configuration files, do nothing
-        if [ "${_conf}" = "/etc/iptables-geoblock/*.allow.4" ]; then
-          printf -- 'No configuration for IPv4 Allowlist found.\n'
+        if [ ! -e "${_conf}" ]; then
+          _log 'No configuration for IPv4 Allowlist found.'
           break
         fi
 
@@ -137,10 +148,10 @@ EOF
       unset _conf
 
       # IPv4 blocklist config
-      for _conf in "/etc/iptables-geoblock"/*".block.4"; do
+      for _conf in "${CONFIG_DIR}"/*".block.4"; do
         # If there were no matching configuration files, do nothing
-        if [ "${_conf}" = "/etc/iptables-geoblock/*.block.4" ]; then
-          printf -- 'No configuration for IPv4 Blocklist found.\n'
+        if [ ! -e "${_conf}" ]; then
+          _log 'No configuration for IPv4 Blocklist found.'
           break
         fi
 
@@ -170,10 +181,10 @@ EOF
 
     if [ "${_ip}" = "ip6tables" ]; then
       # IPv6 allowlist config
-      for _conf in "/etc/iptables-geoblock"/*".allow.6"; do
+      for _conf in "${CONFIG_DIR}"/*".allow.6"; do
         # If there were no matching configuration files, do nothing
-        if [ "${_conf}" = "/etc/iptables-geoblock/*.allow.6" ]; then
-          printf -- 'No configuration for IPv6 Allowlist found.\n'
+        if [ ! -e "${_conf}" ]; then
+          _log 'No configuration for IPv6 Allowlist found.'
           break
         fi
 
@@ -201,10 +212,10 @@ EOF
       unset _conf
 
       # IPv6 blocklist config
-      for _conf in "/etc/iptables-geoblock"/*".block.6"; do
+      for _conf in "${CONFIG_DIR}"/*".block.6"; do
         # If there were no matching configuration files, do nothing
-        if [ "${_conf}" = "/etc/iptables-geoblock/*.block.6" ]; then
-          printf -- 'No configuration for IPv6 Blocklist found.\n'
+        if [ ! -e "${_conf}" ]; then
+          _log 'No configuration for IPv6 Blocklist found.'
           break
         fi
 
@@ -233,10 +244,10 @@ EOF
     fi
 
     # Country allowlist config
-    for _conf in "/etc/iptables-geoblock"/*".allow.country"; do
+    for _conf in "${CONFIG_DIR}"/*".allow.country"; do
       # If there were no matching configuration files, do nothing
-      if [ "${_conf}" = "/etc/iptables-geoblock/*.allow.country" ]; then
-        printf -- 'No configuration for Country Allowlist found.\n'
+      if [ "${_conf}" = "${CONFIG_DIR}/*.allow.country" ]; then
+        _log 'No configuration for Country Allowlist found.'
         break
       fi
 
@@ -277,7 +288,7 @@ _prepare_lists() {
 
   # Read from configuration if they exist
   _source_configs || {
-    printf -- 'Failed to source configuration from /etc/iptables-geoblock\n'
+    _log 'Failed to source configuration from %s' "${CONFIG_DIR}"
     return 1
   }
 
@@ -289,13 +300,13 @@ _apply_blocklist() {
     # Block any bad IPv4 address
     if [ -n "${_ALL_BLOCK_IP4}" ]; then
       for _c in ${_ALL_BLOCK_IP4}; do
-        printf -- 'Block IPv4: %s\n' "${_c}"
+        _log 'Block IPv4: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          printf -- 'Failed to block IPv4: %s\n' "${_c}"
+          _log 'Failed to block IPv4: %s' "${_c}"
         }
       done
     else
-      printf -- 'No IPv4 addresses to block.\n'
+      _log 'No IPv4 addresses to block.'
     fi
   fi
 
@@ -303,13 +314,13 @@ _apply_blocklist() {
     # Block any bad IPv6 address
     if [ -n "${_ALL_BLOCK_IP6}" ]; then
       for _c in ${_ALL_BLOCK_IP6}; do
-        printf -- 'Block IPv6: %s\n' "${_c}"
+        _log 'Block IPv6: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          printf -- 'Failed to block IPv6: %s\n' "${_c}"
+          _log 'Failed to block IPv6: %s' "${_c}"
         }
       done
     else
-      printf -- 'No IPv6 addresses to block.\n'
+      _log 'No IPv6 addresses to block.'
     fi
   fi
 
@@ -321,13 +332,13 @@ _apply_allowlist_ips() {
     # Accept any good IPv4 address
     if [ -n "${_ALL_ACCEPT_IP4}" ]; then
       for _c in ${_ALL_ACCEPT_IP4}; do
-        printf -- 'Allow IPv4: %s\n' "${_c}"
+        _log 'Allow IPv4: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          printf -- 'Failed to allow IPv4: %s\n' "${_c}"
+          _log 'Failed to allow IPv4: %s' "${_c}"
         }
       done
     else
-      printf -- 'No IPv4 addresses to allow.\n'
+      _log 'No IPv4 addresses to allow.'
     fi
   fi
 
@@ -335,13 +346,13 @@ _apply_allowlist_ips() {
     # Accept any good IPv6 address
     if [ -n "${_ALL_ACCEPT_IP6}" ]; then
       for _c in ${_ALL_ACCEPT_IP6}; do
-        printf -- 'Allow IPv6: %s\n' "${_c}"
+        _log 'Allow IPv6: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          printf -- 'Failed to allow IPv6: %s\n' "${_c}"
+          _log 'Failed to allow IPv6: %s' "${_c}"
         }
       done
     else
-      printf -- 'No IPv6 addresses to allow.\n'
+      _log 'No IPv6 addresses to allow.'
     fi
   fi
 
@@ -352,13 +363,13 @@ _apply_allowlist_countries() {
   # Accept any good countries
   if [ -n "${_ALL_ACCEPT_COUNTRIES}" ]; then
     for _c in ${_ALL_ACCEPT_COUNTRIES}; do
-      printf -- 'Accept traffic from country: %s\n' "${_c}"
+      _log 'Accept traffic from country: %s' "${_c}"
       _append_rule_if_not_exists "${_CHAIN_NAME}" -m geoip --src-cc "${_c}" -j RETURN || {
-        printf -- 'Failed to allow country: %s\n' "${_c}"
+        _log 'Failed to allow country: %s' "${_c}"
       }
     done
   else
-    printf -- '!!! No Countries to allow! You are blocking all traffic !!!\n'
+    _log '!!! No Countries to allow! You are blocking all traffic !!!'
   fi
 
   return 0
@@ -370,38 +381,38 @@ _reset_chain() {
   _erase_chain "${_LOGDROP_CHAIN}"
 
   _prepare_logdrop || {
-    printf -- 'Failed to prepare logdrop chain %s\n' "${_LOGDROP_CHAIN}"
+    _log 'Failed to prepare logdrop chain %s' "${_LOGDROP_CHAIN}"
     return 1
   }
 
   _prepare_lists || {
-    printf -- 'Failed to prepare IP lists\n'
+    _log 'Failed to prepare IP lists'
     return 1
   }
 
   _apply_chain_defaults || {
-    printf -- 'Failed to apply chain defaults %s\n' "${_CHAIN_NAME}"
+    _log 'Failed to apply chain defaults %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_allowlist_ips || {
-    printf -- 'Failed applying allowlist IPs to chain %s\n' "${_CHAIN_NAME}"
+    _log 'Failed applying allowlist IPs to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_blocklist || {
-    printf -- 'Failed applying blocklist to chain %s\n' "${_CHAIN_NAME}"
+    _log 'Failed applying blocklist to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_allowlist_countries || {
-    printf -- 'Failed applying allowlist countries to chain %s\n' "${_CHAIN_NAME}"
+    _log 'Failed applying allowlist countries to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   # Otherwise drop
   _nomatch_logdrop || {
-    printf -- 'Failed final nomatch-logdrop setup for %s\n' "${_CHAIN_NAME}"
+    _log 'Failed final nomatch-logdrop setup for %s' "${_CHAIN_NAME}"
     return 1
   }
 
@@ -412,15 +423,15 @@ _iptables_apply() {
   _apply_opts="$1"
 
   if "${_ip}" --new-chain "${_CHAIN_NAME}" >/dev/null 2>&1; then
-    printf -- 'Create new chain: %s\n' "${_CHAIN_NAME}"
+    _log 'Create new chain: %s' "${_CHAIN_NAME}"
   else
-    printf -- 'Refresh existing chain: %s\n' "${_CHAIN_NAME}"
+    _log 'Refresh existing chain: %s' "${_CHAIN_NAME}"
   fi
 
   if "${_ip}" --new-chain "${_LOGDROP_CHAIN}" >/dev/null 2>&1; then
-    printf -- 'Create new chain: %s\n' "${_LOGDROP_CHAIN}"
+    _log 'Create new chain: %s' "${_LOGDROP_CHAIN}"
   else
-    printf -- 'Refresh existing chain: %s\n' "${_LOGDROP_CHAIN}"
+    _log 'Refresh existing chain: %s' "${_LOGDROP_CHAIN}"
   fi
 
   _remove_rule INPUT -j "${_CHAIN_NAME}" || {
@@ -482,7 +493,7 @@ _iptables_clear() {
 _parse_cmd() {
   # Global __command exists
   if [ -z "$1" ]; then
-    printf -- 'Must specify one of "apply" "clear"\n'
+    _log 'Must specify one of "apply" "clear"'
     return 1
   fi
 
@@ -491,7 +502,7 @@ _parse_cmd() {
     __command="$1"
     ;;
   *)
-    printf -- 'Must specify one of "apply" "clear": %s\n' "$1"
+    _log 'Must specify one of "apply" "clear": %s' "$1"
     return 1
     ;;
   esac
@@ -504,7 +515,7 @@ _exec_cmd() {
   _opts="$2"
 
   if [ -z "${_cmd}" ]; then
-    printf -- 'Must specify one of "apply" "clear"\n'
+    _log 'Must specify one of "apply" "clear"'
     _usage || return 1
 
     unset _cmd
@@ -514,14 +525,14 @@ _exec_cmd() {
 
   if [ "${_cmd}" = "apply" ]; then
     _iptables_apply "${_opts}" || {
-      printf -- 'Failed to apply iptables rules. Clean up and exit(1)'
+      _log 'Failed to apply iptables rules. Clean up and exit(1)'
       _iptables_clear "${_opts}" || return 1
       return 1
     }
   elif [ "${_cmd}" = "clear" ]; then
     _iptables_clear "${_opts}" || return 1
   else
-    printf -- 'Unknown execute command: %s (%s)\n' "${_cmd}" "${_opts}"
+    _log 'Unknown execute command: %s (%s)' "${_cmd}" "${_opts}"
     _usage || return 1
 
     unset _cmd
@@ -536,7 +547,7 @@ _exec_cmd() {
 
 _parse_ipv() {
   if [ -z "$1" ]; then
-    printf -- 'Must specify one of "4" "6"\n'
+    _log 'Must specify one of "4" "6"'
     return 1
   fi
 
@@ -545,13 +556,13 @@ _parse_ipv() {
   elif [ "$1" = "6" ]; then
     _ip="ip6tables"
   else
-    printf -- 'Must specify one of "4" "6": %s\n' "$1"
+    _log 'Must specify one of "4" "6": %s' "$1"
     return 1
   fi
 
   # Check exists
   if ! command -v "${_ip}" >/dev/null; then
-    printf -- 'Must have "%s" installed.\n' "${_ip}"
+    _log 'Must have "%s" installed.' "${_ip}"
     return 1
   fi
 
@@ -561,11 +572,11 @@ _parse_ipv() {
 }
 
 _usage() {
-  printf -- '%s\n' "$(
+  _log '%s' "$(
     cat <<EOF
-USAGE:
+${VERSION}
 
-${PROGRAM} ${VERSION} <4|6> <apply|clear>
+${PROGRAM} <4|6> <apply|clear>
 
 4           operate on IPv4 (iptables)
 6           operate on IPv6 (ip6tables)
@@ -578,14 +589,14 @@ EOF
 
 main() {
   if [ "$(id -u)" -ne 0 ]; then
-    printf -- 'Must run as root.\n'
+    _log 'Must run as root.'
     _usage || return 1
     return 1
   fi
 
   # We need grep
   if ! command -v "grep" >/dev/null; then
-    printf -- 'Must have "grep" installed.\n'
+    _log 'Must have "grep" installed.'
     _usage || return 1
     return 1
   fi
