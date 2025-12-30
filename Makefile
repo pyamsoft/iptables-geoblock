@@ -41,6 +41,9 @@ all:
 
 install:
 	@echo "Installing..."
+	@mkdir -p "$(SYSTEMD_DIR)"
+	@mkdir -p "$(SCRIPT_INSTALL_DIR)"
+	@mkdir -p "$(shell dirname $(DOC_INSTALL_TARGET))"
 	@$(MAKE) install-script
 	@$(MAKE) install-systemd
 	@$(MAKE) install-doc
@@ -48,23 +51,19 @@ install:
 
 install-script:
 	@echo "  INSTALL  iptables-geoblock update-geoblock"
-	@mkdir -p "$(SCRIPT_INSTALL_DIR)"
 	@install -Dm 755 "iptables-geoblock" "$(SCRIPT_INSTALL_DIR)/iptables-geoblock"
 	@install -Dm 755 "update-geoblock" "$(SCRIPT_INSTALL_DIR)/update-geoblock"
 
 install-doc:
 	@echo "  INSTALL  $(DOC_INSTALL_TARGET)"
-	@mkdir -p "$(shell dirname $(DOC_INSTALL_TARGET))"
 	@install -Dm 644 "$(DOC_INSTALL_SRC)" "$(DOC_INSTALL_TARGET)"
 
 install-license:
 	@echo "  INSTALL  $(LICENSE_INSTALL_TARGET)"
-	@mkdir -p "$(shell dirname $(LICENSE_INSTALL_TARGET))"
 	@install -Dm 644 "$(LICENSE_INSTALL_SRC)" "$(LICENSE_INSTALL_TARGET)"
 
 install-systemd:
 	@echo "  INSTALL  systemd services"
-	@mkdir -p "$(SYSTEMD_DIR)"
 	@install -Dm 644 "systemd/iptables-geoblock@.service" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
 	@install -Dm 644 "systemd/update-geoblock.service" "$(SYSTEMD_DIR)/update-geoblock.service"
 	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
