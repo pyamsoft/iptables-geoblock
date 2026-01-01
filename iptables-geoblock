@@ -22,12 +22,7 @@ readonly PROGRAM="iptables-geoblock"
 readonly VERSION="0.0.5"
 
 readonly _CHAIN_NAME="IPTABLES_GEOBLOCK"
-readonly _RULES_CHAIN="${_CHAIN_NAME}-RULES"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
-readonly _DEFAULTS_CHAIN="${_CHAIN_NAME}-DEFAULTS"
-
-# DHCPv6 REQUIRES that certain traffic be ALLOWED
-readonly _DHCP6_CHAIN="${_CHAIN_NAME}-DHCP6"
 
 readonly CONFIG_DIR="${CONFIG_DIR:-/etc/iptables-geoblock}"
 
@@ -97,27 +92,28 @@ _erase_chain() {
 
 _apply_chain_defaults() {
   # Drop invalid traffic
-  _append_rule_if_not_exists "${_DEFAULTS_CHAIN}" -m conntrack --ctstate INVALID -j DROP || return 1
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -m conntrack --ctstate INVALID -j DROP || return 1
 
   # Accept related/established traffic
-  _append_rule_if_not_exists "${_DEFAULTS_CHAIN}" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
 
   return 0
 }
 
+# DHCPv6 REQUIRES that certain traffic be ALLOWED
 _apply_chain_dhcp6() {
   # Accept DHCPv6 traffic
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN || return 1
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN || return 1
 
   # Neighbor Discovery
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -p ipv6-icmp --icmpv6-type 135 -j RETURN
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -p ipv6-icmp --icmpv6-type 136 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 135 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 136 -j RETURN
 
   # Router Advertisement (SLAAC)
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -p ipv6-icmp --icmpv6-type 134 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 134 -j RETURN
 
   # Redirect
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -p ipv6-icmp --icmpv6-type 137 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 137 -j RETURN
 
   return 0
 }
@@ -130,7 +126,7 @@ _prepare_logdrop() {
 }
 
 _nomatch_logdrop() {
-  _append_rule_if_not_exists "${_RULES_CHAIN}" -j "${_LOGDROP_CHAIN}" || return 1
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -j "${_LOGDROP_CHAIN}" || return 1
 
   return 0
 }
@@ -323,7 +319,7 @@ _apply_blocklist() {
     if [ -n "${_ALL_BLOCK_IP4}" ]; then
       for _c in ${_ALL_BLOCK_IP4}; do
         _log 'Block IPv4: %s' "${_c}"
-        _append_rule_if_not_exists "${_RULES_CHAIN}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
+        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
           _log 'Failed to block IPv4: %s' "${_c}"
         }
       done
@@ -337,7 +333,7 @@ _apply_blocklist() {
     if [ -n "${_ALL_BLOCK_IP6}" ]; then
       for _c in ${_ALL_BLOCK_IP6}; do
         _log 'Block IPv6: %s' "${_c}"
-        _append_rule_if_not_exists "${_RULES_CHAIN}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
+        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
           _log 'Failed to block IPv6: %s' "${_c}"
         }
       done
@@ -355,7 +351,7 @@ _apply_allowlist_ips() {
     if [ -n "${_ALL_ACCEPT_IP4}" ]; then
       for _c in ${_ALL_ACCEPT_IP4}; do
         _log 'Allow IPv4: %s' "${_c}"
-        _append_rule_if_not_exists "${_RULES_CHAIN}" --source "${_c}" -j RETURN || {
+        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
           _log 'Failed to allow IPv4: %s' "${_c}"
         }
       done
@@ -369,7 +365,7 @@ _apply_allowlist_ips() {
     if [ -n "${_ALL_ACCEPT_IP6}" ]; then
       for _c in ${_ALL_ACCEPT_IP6}; do
         _log 'Allow IPv6: %s' "${_c}"
-        _append_rule_if_not_exists "${_RULES_CHAIN}" --source "${_c}" -j RETURN || {
+        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
           _log 'Failed to allow IPv6: %s' "${_c}"
         }
       done
@@ -386,7 +382,7 @@ _apply_allowlist_countries() {
   if [ -n "${_ALL_ACCEPT_COUNTRIES}" ]; then
     for _c in ${_ALL_ACCEPT_COUNTRIES}; do
       _log 'Accept traffic from country: %s' "${_c}"
-      _append_rule_if_not_exists "${_RULES_CHAIN}" -m geoip --src-cc "${_c}" -j RETURN || {
+      _append_rule_if_not_exists "${_CHAIN_NAME}" -m geoip --src-cc "${_c}" -j RETURN || {
         _log 'Failed to allow country: %s' "${_c}"
       }
     done
@@ -409,35 +405,35 @@ _setup_chains() {
   }
 
   _apply_chain_defaults || {
-    _log 'Failed to apply chain defaults %s' "${_DEFAULTS_CHAIN}"
+    _log 'Failed to apply chain defaults %s' "${_CHAIN_NAME}"
     return 1
   }
 
   if [ "${_ip}" = "ip6tables" ]; then
     _apply_chain_dhcp6 || {
-      _log 'Failed to apply chain DHCPv6 %s' "${_DHCP6_CHAIN}"
+      _log 'Failed to apply chain DHCPv6 %s' "${_CHAIN_NAME}"
       return 1
     }
   fi
 
   _apply_allowlist_ips || {
-    _log 'Failed applying allowlist IPs to chain %s' "${_RULES_CHAIN}"
+    _log 'Failed applying allowlist IPs to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_blocklist || {
-    _log 'Failed applying blocklist to chain %s' "${_RULES_CHAIN}"
+    _log 'Failed applying blocklist to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_allowlist_countries || {
-    _log 'Failed applying allowlist countries to chain %s' "${_RULES_CHAIN}"
+    _log 'Failed applying allowlist countries to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   # Otherwise drop
   _nomatch_logdrop || {
-    _log 'Failed final nomatch-logdrop setup for %s' "${_RULES_CHAIN}"
+    _log 'Failed final nomatch-logdrop setup for %s' "${_CHAIN_NAME}"
     return 1
   }
 
@@ -458,30 +454,17 @@ _ensure_chain() {
 }
 
 _reset_chains_to_default_state() {
-  _remove_rule INPUT -j "${_DEFAULTS_CHAIN}" || return 1
-  _remove_rule INPUT -j "${_RULES_CHAIN}" || return 1
-  if [ "${_ip}" = "ip6tables" ]; then
-    _remove_rule INPUT -j "${_DHCP6_CHAIN}" || return 1
-  fi
+  _remove_rule INPUT -j "${_CHAIN_NAME}" || return 1
 
-  _erase_chain "${_RULES_CHAIN}" || return 1
+  _erase_chain "${_CHAIN_NAME}" || return 1
   _erase_chain "${_LOGDROP_CHAIN}" || return 1
-  _erase_chain "${_DEFAULTS_CHAIN}" || return 1
-  if [ "${_ip}" = "ip6tables" ]; then
-    _erase_chain "${_DHCP6_CHAIN}" || return 1
-  fi
 }
 
 _iptables_apply() {
   _apply_opts="$1"
 
-  _ensure_chain "${_RULES_CHAIN}"
+  _ensure_chain "${_CHAIN_NAME}"
   _ensure_chain "${_LOGDROP_CHAIN}"
-  _ensure_chain "${_DEFAULTS_CHAIN}"
-
-  if [ "${_ip}" = "ip6tables" ]; then
-    _ensure_chain "${_DHCP6_CHAIN}"
-  fi
 
   _reset_chains_to_default_state || {
     unset _apply_opts
@@ -494,17 +477,7 @@ _iptables_apply() {
   }
 
   # Since we use insert, add these in reverse order
-  _insert_rule_if_not_exists INPUT -j "${_RULES_CHAIN}" || {
-    unset _apply_opts
-    return 1
-  }
-  if [ "${_ip}" = "ip6tables" ]; then
-    _insert_rule_if_not_exists INPUT -j "${_DHCP6_CHAIN}" || {
-      unset _apply_opts
-      return 1
-    }
-  fi
-  _insert_rule_if_not_exists INPUT -j "${_DEFAULTS_CHAIN}" || {
+  _insert_rule_if_not_exists INPUT -j "${_CHAIN_NAME}" || {
     unset _apply_opts
     return 1
   }
