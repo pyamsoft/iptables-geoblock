@@ -44,6 +44,19 @@ _log() {
   return 0
 }
 
+_delete_chain() {
+  _delete_chain_name="$1"
+
+  _log 'Delete leftover chain %s' "${_delete_chain_name}"
+  "${_ip}" --delete-chain "${_delete_chain_name}" >/dev/null 2>&1 || {
+    _log 'Failed to delete chain %s' "${_delete_chain_name}"
+    return 1
+  }
+
+  unset _delete_chain_name
+  return 0
+}
+
 _remove_rule() {
   if "${_ip}" -C "$@" >/dev/null 2>&1; then
     _log 'Remove rule: %s -D %s' "${_ip}" "$*"
@@ -495,11 +508,8 @@ _iptables_clear() {
   }
 
   # Delete chains
-  _log 'Delete leftover chain %s' "${_CHAIN_NAME}"
-  "${_ip}" --delete-chain "${_CHAIN_NAME}" >/dev/null 2>&1 || {
-    _log 'Failed to delete chain %s' "${_CHAIN_NAME}"
-    return 1
-  }
+  _delete_chain "${_LOGDROP_CHAIN}" || return 1
+  _delete_chain "${_CHAIN_NAME}" || return 1
 
   unset _clear_opts
   return 0
