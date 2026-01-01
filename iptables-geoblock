@@ -99,7 +99,7 @@ _apply_chain_defaults() {
   _append_rule_if_not_exists "${_DEFAULTS_CHAIN}" -m conntrack --ctstate INVALID -j DROP || return 1
 
   # Accept related/established traffic
-  _append_rule_if_not_exists "${_DEFAULTS_CHAIN}" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
+  _append_rule_if_not_exists "${_DEFAULTS_CHAIN}" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || return 1
 
   # First route traffic to defaults
   _append_rule_if_not_exists "${_CHAIN_NAME}" -j "${_DEFAULTS_CHAIN}" || return 1
@@ -109,7 +109,7 @@ _apply_chain_defaults() {
 
 _apply_chain_dhcp6() {
   # Accept DHCPv6 traffic
-  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN || return 1
+  _append_rule_if_not_exists "${_DHCP6_CHAIN}" -s fe80::/10 -p udp --sport 547 --dport 546 -j ACCEPT || return 1
 
   # Neighbor Discovery
   _append_rule_if_not_exists "${_DHCP6_CHAIN}" -p ipv6-icmp --icmpv6-type 135 -j ACCEPT
