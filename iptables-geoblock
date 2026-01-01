@@ -406,6 +406,10 @@ _reset_chain() {
   # If this fails I guess its ok, the chain doesn't exist so we don't need to erase it
   _erase_chain "${_CHAIN_NAME}"
   _erase_chain "${_LOGDROP_CHAIN}"
+  _erase_chain "${_DEFAULTS_CHAIN}"
+  if [ "${_ip}" = "ip6tables" ]; then
+    _erase_chain "${_DHCP6_CHAIN}"
+  fi
 
   _prepare_logdrop || {
     _log 'Failed to prepare logdrop chain %s' "${_LOGDROP_CHAIN}"
@@ -534,10 +538,12 @@ _iptables_clear() {
     return 1
   }
 
-  _erase_chain "${_DHCP6_CHAIN}" || {
-    unset _clear_opts
-    return 1
-  }
+  if [ "${_ip}" = "ip6tables" ]; then
+    _erase_chain "${_DHCP6_CHAIN}" || {
+      unset _clear_opts
+      return 1
+    }
+  fi
 
   unset _clear_opts
   return 0
