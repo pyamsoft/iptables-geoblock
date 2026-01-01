@@ -494,6 +494,13 @@ _iptables_clear() {
     return 1
   }
 
+  # Delete chains
+  _log 'Delete leftover chain %s' "${_CHAIN_NAME}"
+  "${_ip}" --delete-chain "${_CHAIN_NAME}" >/dev/null 2>&1 || {
+    _log 'Failed to delete chain %s' "${_CHAIN_NAME}"
+    return 1
+  }
+
   unset _clear_opts
   return 0
 }
