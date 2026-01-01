@@ -472,7 +472,10 @@ _iptables_apply() {
   _ensure_chain "${_CHAIN_NAME}"
   _ensure_chain "${_LOGDROP_CHAIN}"
   _ensure_chain "${_DEFAULTS_CHAIN}"
-  _ensure_chain "${_DHCP6_CHAIN}"
+
+  if [ "${_ip}" = "ip6tables" ]; then
+    _ensure_chain "${_DHCP6_CHAIN}"
+  fi
 
   _remove_rule INPUT -j "${_CHAIN_NAME}" || {
     unset _apply_opts
