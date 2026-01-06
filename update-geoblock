@@ -30,41 +30,53 @@ _log() {
   return 0
 }
 
+##
+# Error Log
+#
+# Accepts arguments in the same format as printf
+# $1 message
+# $@ arguments
+##
+_elog() {
+  _log "$@" 1>&2 || return 1
+  return 0
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
-    _log 'Must run as root.'
+    _elog 'Must run as root.'
     return 1
   fi
 
   cd /usr/libexec/xtables-addons || {
-    _log 'Failed to cd into /usr/libexec/xtables-addons directory.'
+    _elog 'Failed to cd into /usr/libexec/xtables-addons directory.'
     return 1
   }
 
   mkdir -p /usr/share/xt_geoip || {
-    _log 'Failed to make target /usr/share/xt_geoip directory.'
+    _elog 'Failed to make target /usr/share/xt_geoip directory.'
     return 1
   }
 
   chmod 755 /usr/share/xt_geoip || {
-    _log 'Failed to mark exec target /usr/share/xt_geoip directory.'
+    _elog 'Failed to mark exec target /usr/share/xt_geoip directory.'
     return 1
   }
 
   # Download (will save as dbip-country-lite.csv)
   ./xt_geoip_dl || {
-    _log 'Failed to download latest geoip using xt_geoip_dl'
+    _elog 'Failed to download latest geoip using xt_geoip_dl'
     return 1
   }
 
   ./xt_geoip_build -D /usr/share/xt_geoip dbip-country-lite.csv || {
-    _log 'Failed to convert CSV to GEO-IP using xt_geoip_build'
+    _elog 'Failed to convert CSV to GEO-IP using xt_geoip_build'
     _log 'On Debian 12/13, you may need to run: "%s"\n' "apt --mark-auto install libtext-csv-xs-perl"
     return 1
   }
 
   rm -f dbip-country-lite.csv || {
-    _log 'Failed to remove dbip-country-lite.csv now that it has been consumed.'
+    _elog 'Failed to remove dbip-country-lite.csv now that it has been consumed.'
     return 1
   }
 

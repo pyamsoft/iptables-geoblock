@@ -19,7 +19,7 @@
 #   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 readonly PROGRAM="iptables-geoblock"
-readonly VERSION="0.0.5"
+readonly VERSION="0.0.6"
 
 readonly _CHAIN_NAME="IPTABLES_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
@@ -44,12 +44,24 @@ _log() {
   return 0
 }
 
+##
+# Error Log
+#
+# Accepts arguments in the same format as printf
+# $1 message
+# $@ arguments
+##
+_elog() {
+  _log "$@" 1>&2 || return 1
+  return 0
+}
+
 _delete_chain() {
   _delete_chain_name="$1"
 
   _log 'Delete leftover chain %s' "${_delete_chain_name}"
   "${_ip}" --delete-chain "${_delete_chain_name}" >/dev/null 2>&1 || {
-    _log 'Failed to delete chain %s' "${_delete_chain_name}"
+    _elog 'Failed to delete chain %s' "${_delete_chain_name}"
     return 1
   }
 
@@ -319,7 +331,7 @@ _prepare_lists() {
 
   # Read from configuration if they exist
   _source_configs || {
-    _log 'Failed to source configuration from %s' "${CONFIG_DIR}"
+    _elog 'Failed to source configuration from %s' "${CONFIG_DIR}"
     return 1
   }
 
@@ -333,7 +345,7 @@ _apply_blocklist() {
       for _c in ${_ALL_BLOCK_IP4}; do
         _log 'Block IPv4: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          _log 'Failed to block IPv4: %s' "${_c}"
+          _elog 'Failed to block IPv4: %s' "${_c}"
         }
       done
     else
@@ -347,7 +359,7 @@ _apply_blocklist() {
       for _c in ${_ALL_BLOCK_IP6}; do
         _log 'Block IPv6: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          _log 'Failed to block IPv6: %s' "${_c}"
+          _elog 'Failed to block IPv6: %s' "${_c}"
         }
       done
     else
@@ -365,7 +377,7 @@ _apply_allowlist_ips() {
       for _c in ${_ALL_ACCEPT_IP4}; do
         _log 'Allow IPv4: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          _log 'Failed to allow IPv4: %s' "${_c}"
+          _elog 'Failed to allow IPv4: %s' "${_c}"
         }
       done
     else
@@ -379,7 +391,7 @@ _apply_allowlist_ips() {
       for _c in ${_ALL_ACCEPT_IP6}; do
         _log 'Allow IPv6: %s' "${_c}"
         _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          _log 'Failed to allow IPv6: %s' "${_c}"
+          _elog 'Failed to allow IPv6: %s' "${_c}"
         }
       done
     else
@@ -396,11 +408,11 @@ _apply_allowlist_countries() {
     for _c in ${_ALL_ACCEPT_COUNTRIES}; do
       _log 'Accept traffic from country: %s' "${_c}"
       _append_rule_if_not_exists "${_CHAIN_NAME}" -m geoip --src-cc "${_c}" -j RETURN || {
-        _log 'Failed to allow country: %s' "${_c}"
+        _elog 'Failed to allow country: %s' "${_c}"
       }
     done
   else
-    _log '!!! No Countries to allow! You are blocking all traffic !!!'
+    _elog '!!! No Countries to allow! You are blocking all traffic !!!'
   fi
 
   return 0
@@ -408,45 +420,45 @@ _apply_allowlist_countries() {
 
 _setup_chains() {
   _prepare_logdrop || {
-    _log 'Failed to prepare logdrop chain %s' "${_LOGDROP_CHAIN}"
+    _elog 'Failed to prepare logdrop chain %s' "${_LOGDROP_CHAIN}"
     return 1
   }
 
   _prepare_lists || {
-    _log 'Failed to prepare IP lists'
+    _elog 'Failed to prepare IP lists'
     return 1
   }
 
   _apply_chain_defaults || {
-    _log 'Failed to apply chain defaults %s' "${_CHAIN_NAME}"
+    _elog 'Failed to apply chain defaults %s' "${_CHAIN_NAME}"
     return 1
   }
 
   if [ "${_ip}" = "ip6tables" ]; then
     _apply_chain_dhcp6 || {
-      _log 'Failed to apply chain DHCPv6 %s' "${_CHAIN_NAME}"
+      _elog 'Failed to apply chain DHCPv6 %s' "${_CHAIN_NAME}"
       return 1
     }
   fi
 
   _apply_allowlist_ips || {
-    _log 'Failed applying allowlist IPs to chain %s' "${_CHAIN_NAME}"
+    _elog 'Failed applying allowlist IPs to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_blocklist || {
-    _log 'Failed applying blocklist to chain %s' "${_CHAIN_NAME}"
+    _elog 'Failed applying blocklist to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   _apply_allowlist_countries || {
-    _log 'Failed applying allowlist countries to chain %s' "${_CHAIN_NAME}"
+    _elog 'Failed applying allowlist countries to chain %s' "${_CHAIN_NAME}"
     return 1
   }
 
   # Otherwise drop
   _nomatch_logdrop || {
-    _log 'Failed final nomatch-logdrop setup for %s' "${_CHAIN_NAME}"
+    _elog 'Failed final nomatch-logdrop setup for %s' "${_CHAIN_NAME}"
     return 1
   }
 
@@ -518,7 +530,7 @@ _iptables_clear() {
 _parse_cmd() {
   # Global __command exists
   if [ -z "$1" ]; then
-    _log 'Must specify one of "apply" "clear"'
+    _elog 'Must specify one of "apply" "clear"'
     return 1
   fi
 
@@ -527,7 +539,7 @@ _parse_cmd() {
     __command="$1"
     ;;
   *)
-    _log 'Must specify one of "apply" "clear": %s' "$1"
+    _elog 'Must specify one of "apply" "clear": %s' "$1"
     return 1
     ;;
   esac
@@ -540,7 +552,7 @@ _exec_cmd() {
   _opts="$2"
 
   if [ -z "${_cmd}" ]; then
-    _log 'Must specify one of "apply" "clear"'
+    _elog 'Must specify one of "apply" "clear"'
     _usage || return 1
 
     unset _cmd
@@ -550,14 +562,14 @@ _exec_cmd() {
 
   if [ "${_cmd}" = "apply" ]; then
     _iptables_apply "${_opts}" || {
-      _log 'Failed to apply iptables rules. Clean up and exit(1)'
+      _elog 'Failed to apply iptables rules. Clean up and exit(1)'
       _iptables_clear "${_opts}" || return 1
       return 1
     }
   elif [ "${_cmd}" = "clear" ]; then
     _iptables_clear "${_opts}" || return 1
   else
-    _log 'Unknown execute command: %s (%s)' "${_cmd}" "${_opts}"
+    _elog 'Unknown execute command: %s (%s)' "${_cmd}" "${_opts}"
     _usage || return 1
 
     unset _cmd
@@ -572,7 +584,7 @@ _exec_cmd() {
 
 _parse_ipv() {
   if [ -z "$1" ]; then
-    _log 'Must specify one of "4" "6"'
+    _elog 'Must specify one of "4" "6"'
     return 1
   fi
 
@@ -581,13 +593,13 @@ _parse_ipv() {
   elif [ "$1" = "6" ]; then
     _ip="ip6tables"
   else
-    _log 'Must specify one of "4" "6": %s' "$1"
+    _elog 'Must specify one of "4" "6": %s' "$1"
     return 1
   fi
 
   # Check exists
   if ! command -v "${_ip}" >/dev/null; then
-    _log 'Must have "%s" installed.' "${_ip}"
+    _elog 'Must have "%s" installed.' "${_ip}"
     return 1
   fi
 
@@ -614,14 +626,14 @@ EOF
 
 main() {
   if [ "$(id -u)" -ne 0 ]; then
-    _log 'Must run as root.'
+    _elog 'Must run as root.'
     _usage || return 1
     return 1
   fi
 
   # We need grep
   if ! command -v "grep" >/dev/null; then
-    _log 'Must have "grep" installed.'
+    _elog 'Must have "grep" installed.'
     _usage || return 1
     return 1
   fi
