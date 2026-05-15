@@ -28,7 +28,7 @@ readonly CONFIG_DIR="${CONFIG_DIR:-/etc/iptables-geoblock}"
 
 readonly _ACCEPT_COUNTRIES=""
 
-readonly _ACCEPT_IP4="127.0.0.1/8"
+readonly _ACCEPT_IP4="127.0.0.0/8"
 readonly _ACCEPT_IP6="::1/128"
 
 readonly _BLOCK_IP4=""
@@ -131,14 +131,14 @@ _apply_chain_dhcp6() {
   _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN || return 1
 
   # Neighbor Discovery
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 135 -j RETURN
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 136 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 135 -j RETURN || return 1
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 136 -j RETURN || return 1
 
   # Router Advertisement (SLAAC)
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 134 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p ipv6-icmp --icmpv6-type 134 -j RETURN || return 1
 
   # Redirect
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 137 -j RETURN
+  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p ipv6-icmp --icmpv6-type 137 -j RETURN || return 1
 
   return 0
 }
@@ -483,6 +483,8 @@ _reset_chains_to_default_state() {
 
   _erase_chain "${_CHAIN_NAME}" || return 1
   _erase_chain "${_LOGDROP_CHAIN}" || return 1
+
+  return 0
 }
 
 _iptables_apply() {
