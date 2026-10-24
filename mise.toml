@@ -1,0 +1,3 @@
+[tools]
+bats = "1.14"
+shellcheck = "0.11"
