@@ -29,6 +29,7 @@ SCRIPT_INSTALL_DIR="$(DESTDIR)/$(PREFIX)/bin"
 DOC_INSTALL_TARGET="$(DESTDIR)/$(PREFIX)/share/doc/$(NAME)/README.md"
 LICENSE_INSTALL_TARGET="$(DESTDIR)/$(PREFIX)/share/doc/$(NAME)/LICENSE"
 SYSTEMD_DIR="$(DESTDIR)/$(SYSTEM_PREFIX)/lib/systemd/system/"
+GEOIP_DIR="$(DESTDIR)/$(SYSTEM_PREFIX)/share/xt_geoip"
 
 .PHONY: all install uninstall \
 	install-doc install-license install-script install-systemd \
@@ -44,6 +45,7 @@ install:
 	@mkdir -p "$(SYSTEMD_DIR)"
 	@mkdir -p "$(SCRIPT_INSTALL_DIR)"
 	@mkdir -p "$(shell dirname $(DOC_INSTALL_TARGET))"
+	@install -dm 755 "$(GEOIP_DIR)"
 	@$(MAKE) install-script
 	@$(MAKE) install-systemd
 	@$(MAKE) install-doc
@@ -66,8 +68,9 @@ install-systemd:
 	@echo "  INSTALL  systemd services"
 	@install -Dm 644 "systemd/iptables-geoblock@.service" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
 	@install -Dm 644 "systemd/update-geoblock.service" "$(SYSTEMD_DIR)/update-geoblock.service"
-	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
-	@sed -i "s|%PREFIX%|$(PREFIX)|" "$(SYSTEMD_DIR)/update-geoblock.service"
+	@install -Dm 644 "systemd/update-geoblock.timer" "$(SYSTEMD_DIR)/update-geoblock.timer"
+	@sed -i "s|%PREFIX%|$(PREFIX)|g" "$(SYSTEMD_DIR)/iptables-geoblock@.service"
+	@sed -i "s|%PREFIX%|$(PREFIX)|g" "$(SYSTEMD_DIR)/update-geoblock.service"
 	
 uninstall:
 	@echo "Uninstalling..."
@@ -95,3 +98,4 @@ uninstall-systemd:
 	@echo "  UNINSTALL  systemd services"
 	@rm -f "$(SYSTEMD_DIR)/iptables-geoblock@.service"
 	@rm -f "$(SYSTEMD_DIR)/update-geoblock.service"
+	@rm -f "$(SYSTEMD_DIR)/update-geoblock.timer"

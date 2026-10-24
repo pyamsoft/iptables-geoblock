@@ -1,5 +1,7 @@
 ##
 # Maintainer: pyamsoft <developer(dot)pyamsoft(at)gmail(dot)com>
+#
+# shellcheck shell=bash
 ##
 
 _gitname=iptables-geoblock
@@ -25,6 +27,7 @@ provides=('iptables-geoblock')
 conflicts=('iptables-geoblock')
 # shellcheck disable=SC2034
 license=('GPL2')
+# shellcheck disable=SC2034
 url="https://github.com/pyamsoft/iptables-geoblock.git"
 
 ##

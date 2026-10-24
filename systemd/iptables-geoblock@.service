@@ -23,8 +23,10 @@ Wants=network-pre.target
 After=iptables.service ip6tables.service ebtables.service ipset.service nftables.service firewalld.service netfilter-persistent.service
 
 [Service]
+Type=oneshot
 RemainAfterExit=true
 ExecStart=%PREFIX%/bin/iptables-geoblock %I apply
+ExecReload=%PREFIX%/bin/iptables-geoblock %I apply
 ExecStop=%PREFIX%/bin/iptables-geoblock %I clear
 
 [Install]
