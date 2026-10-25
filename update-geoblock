@@ -20,13 +20,35 @@
 
 readonly PROGRAM="update-geoblock"
 
+readonly XTABLES_ADDONS_DIR="${XTABLES_ADDONS_DIR:-/usr/libexec/xtables-addons}"
+readonly GEOIP_DIR="${GEOIP_DIR:-/usr/share/xt_geoip}"
+
+# Global: temporary download directory, removed by _cleanup on exit or signal
+__workdir=""
+
+# Global: staging directory inside GEOIP_DIR, removed by _cleanup on exit or signal
+__staging=""
+
+# Global: exit status of main, kept so _cleanup can run before exit
+__result=0
+
+##
+# Log
+#
+# Accepts arguments in the same format as printf
+# $1 message
+# $@ arguments
+##
 _log() {
-  _msg="$1"
+  _log__msg="$1"
   shift
 
-  printf -- "[%s]: ${_msg}\n" "${PROGRAM}" "$@" || return 1
+  printf -- "[%s]: ${_log__msg}\n" "${PROGRAM}" "$@" || {
+    unset _log__msg
+    return 1
+  }
 
-  unset _msg
+  unset _log__msg
   return 0
 }
 
@@ -42,47 +64,194 @@ _elog() {
   return 0
 }
 
+_cleanup() {
+  if [ -n "${__staging}" ]; then
+    rm -rf "${__staging}"
+  fi
+
+  if [ -n "${__workdir}" ]; then
+    rm -rf "${__workdir}"
+  fi
+
+  return 0
+}
+
+_download() {
+  _download__workdir="$1"
+
+  cd "${_download__workdir}" || {
+    _elog 'Failed to cd into work directory %s' "${_download__workdir}"
+    unset _download__workdir
+    return 1
+  }
+  unset _download__workdir
+
+  # Download (will save as dbip-country-lite.csv)
+  "${XTABLES_ADDONS_DIR}/xt_geoip_dl" || {
+    _elog 'Failed to download latest geoip using xt_geoip_dl'
+    return 1
+  }
+
+  if [ ! -s dbip-country-lite.csv ]; then
+    _elog 'Downloaded dbip-country-lite.csv is missing or empty.'
+    return 1
+  fi
+
+  return 0
+}
+
+_build() {
+  _build__workdir="$1"
+  _build__staging="$2"
+
+  cd "${_build__workdir}" || {
+    _elog 'Failed to cd into work directory %s' "${_build__workdir}"
+    unset _build__workdir
+    unset _build__staging
+    return 1
+  }
+  unset _build__workdir
+
+  "${XTABLES_ADDONS_DIR}/xt_geoip_build" -D "${_build__staging}" dbip-country-lite.csv || {
+    _elog 'Failed to convert CSV to GEO-IP using xt_geoip_build'
+    _elog 'On Debian 12/13, you may need to run: "%s"' "apt --mark-auto install libtext-csv-xs-perl"
+    unset _build__staging
+    return 1
+  }
+
+  for _build__built in "${_build__staging}"/*.iv4; do
+    if [ ! -e "${_build__built}" ]; then
+      _elog 'xt_geoip_build did not produce any database files.'
+      unset _build__staging
+      unset _build__built
+      return 1
+    fi
+    break
+  done
+
+  unset _build__staging
+  unset _build__built
+  return 0
+}
+
+# Each country file is replaced by rename so a rule loading mid-update never reads a partial file
+_install() {
+  _install__staging="$1"
+
+  for _install__old in "${GEOIP_DIR}"/*.iv4 "${GEOIP_DIR}"/*.iv6; do
+    if [ -e "${_install__old}" ] && [ ! -e "${_install__staging}/${_install__old##*/}" ]; then
+      _log 'Remove stale %s' "${_install__old}"
+      rm -f "${_install__old}" || {
+        _elog 'Failed to remove stale %s' "${_install__old}"
+        unset _install__staging
+        unset _install__old
+        return 1
+      }
+    fi
+  done
+  unset _install__old
+
+  for _install__new in "${_install__staging}"/*.iv4 "${_install__staging}"/*.iv6; do
+    if [ -e "${_install__new}" ]; then
+      chmod 644 "${_install__new}" || {
+        _elog 'Failed to set permissions on %s' "${_install__new}"
+        unset _install__staging
+        unset _install__new
+        return 1
+      }
+
+      mv -f "${_install__new}" "${GEOIP_DIR}/" || {
+        _elog 'Failed to install %s into %s' "${_install__new}" "${GEOIP_DIR}"
+        unset _install__staging
+        unset _install__new
+        return 1
+      }
+    fi
+  done
+
+  unset _install__staging
+  unset _install__new
+  return 0
+}
+
+# xt_geoip reads the database when a rule is loaded, so running rules must be re-applied
+_reload_rules() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    _log 'Re-run "iptables-geoblock <4|6> apply" to load the new database.'
+    return 0
+  fi
+
+  _reload_rules__status=0
+  for _reload_rules__family in 4 6; do
+    _reload_rules__unit="iptables-geoblock@${_reload_rules__family}.service"
+    if systemctl --quiet is-active "${_reload_rules__unit}" || systemctl --quiet is-enabled "${_reload_rules__unit}"; then
+      _log 'Reload %s' "${_reload_rules__unit}"
+      systemctl reload-or-restart "${_reload_rules__unit}" || {
+        _elog 'Failed to reload %s' "${_reload_rules__unit}"
+        _reload_rules__status=1
+      }
+    fi
+  done
+  unset _reload_rules__family
+  unset _reload_rules__unit
+
+  if [ "${_reload_rules__status}" -ne 0 ]; then
+    unset _reload_rules__status
+    return 1
+  fi
+
+  unset _reload_rules__status
+  return 0
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
     _elog 'Must run as root.'
     return 1
   fi
 
-  cd /usr/libexec/xtables-addons || {
-    _elog 'Failed to cd into /usr/libexec/xtables-addons directory.'
+  for main__tool in xt_geoip_dl xt_geoip_build; do
+    if [ ! -x "${XTABLES_ADDONS_DIR}/${main__tool}" ]; then
+      _elog 'Missing %s in %s' "${main__tool}" "${XTABLES_ADDONS_DIR}"
+      unset main__tool
+      return 1
+    fi
+  done
+  unset main__tool
+
+  mkdir -p "${GEOIP_DIR}" || {
+    _elog 'Failed to make target %s directory.' "${GEOIP_DIR}"
     return 1
   }
 
-  mkdir -p /usr/share/xt_geoip || {
-    _elog 'Failed to make target /usr/share/xt_geoip directory.'
+  chmod 755 "${GEOIP_DIR}" || {
+    _elog 'Failed to mark exec target %s directory.' "${GEOIP_DIR}"
     return 1
   }
 
-  chmod 755 /usr/share/xt_geoip || {
-    _elog 'Failed to mark exec target /usr/share/xt_geoip directory.'
+  __workdir="$(mktemp -d)" || {
+    _elog 'Failed to create work directory.'
     return 1
   }
 
-  # Download (will save as dbip-country-lite.csv)
-  ./xt_geoip_dl || {
-    _elog 'Failed to download latest geoip using xt_geoip_dl'
+  __staging="$(mktemp -d "${GEOIP_DIR}/.staging.XXXXXX")" || {
+    _elog 'Failed to create staging directory in %s' "${GEOIP_DIR}"
     return 1
   }
 
-  ./xt_geoip_build -D /usr/share/xt_geoip dbip-country-lite.csv || {
-    _elog 'Failed to convert CSV to GEO-IP using xt_geoip_build'
-    _log 'On Debian 12/13, you may need to run: "%s"\n' "apt --mark-auto install libtext-csv-xs-perl"
-    return 1
-  }
+  _download "${__workdir}" || return 1
+  _build "${__workdir}" "${__staging}" || return 1
+  _install "${__staging}" || return 1
 
-  rm -f dbip-country-lite.csv || {
-    _elog 'Failed to remove dbip-country-lite.csv now that it has been consumed.'
-    return 1
-  }
+  _log 'GeoIP database is updated in %s' "${GEOIP_DIR}"
 
-  _log 'GeoIP database is updated in /usr/share/xt_geoip'
+  _reload_rules || return 1
   return 0
 }
 
-main "$@" || exit 1
-exit 0
+trap '_cleanup; exit 1' HUP INT TERM
+
+main "$@"
+__result="$?"
+_cleanup
+exit "${__result}"
