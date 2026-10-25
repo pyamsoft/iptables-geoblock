@@ -34,7 +34,7 @@ main() {
     "${ROOT}"/packaging/debian/docheckinstall \
     "${ROOT}"/bin/* \
     "${ROOT}"/tests/*.bats \
-    "${ROOT}"/tests/helpers/* \
+    "${ROOT}"/tests/test_helper.bash \
     "$@"
   return "$?"
 }
