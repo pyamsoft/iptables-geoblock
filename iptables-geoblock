@@ -25,22 +25,30 @@ readonly _CHAIN_NAME="IPTABLES_GEOBLOCK"
 readonly _LOGDROP_CHAIN="${_CHAIN_NAME}-LOGDROP"
 
 readonly CONFIG_DIR="${CONFIG_DIR:-/etc/iptables-geoblock}"
+readonly GEOIP_DIR="${GEOIP_DIR:-/usr/share/xt_geoip}"
 
-readonly _ACCEPT_COUNTRIES=""
+set -f
 
-readonly _ACCEPT_IP4="127.0.0.0/8"
-readonly _ACCEPT_IP6="::1/128"
+__IPTABLES=""
+__FAMILY=""
 
-readonly _BLOCK_IP4=""
-readonly _BLOCK_IP6=""
-
+##
+# Log
+#
+# Accepts arguments in the same format as printf
+# $1 message
+# $@ arguments
+##
 _log() {
-  _msg="$1"
+  _log__msg="$1"
   shift
 
-  printf -- "[%s]: ${_msg}\n" "${PROGRAM}" "$@" || return 1
+  printf -- "[%s]: ${_log__msg}\n" "${PROGRAM}" "$@" || {
+    unset _log__msg
+    return 1
+  }
 
-  unset _msg
+  unset _log__msg
   return 0
 }
 
@@ -53,560 +61,600 @@ _log() {
 ##
 _elog() {
   _log "$@" 1>&2 || return 1
+
   return 0
 }
 
-_delete_chain() {
-  _delete_chain_name="$1"
+##
+# Run the iptables binary for the chosen IP family
+#
+# $@ iptables arguments
+##
+_ipt() {
+  # Wait for the lock just in case
+  "${__IPTABLES}" -w "$@" || return 1
 
-  _log 'Delete leftover chain %s' "${_delete_chain_name}"
-  "${_ip}" --delete-chain "${_delete_chain_name}" >/dev/null 2>&1 || {
-    _elog 'Failed to delete chain %s' "${_delete_chain_name}"
+  return 0
+}
+
+_chain_exists() {
+  _chain_exists__chain="$1"
+
+  _ipt -S "${_chain_exists__chain}" >/dev/null 2>&1 || {
+    unset _chain_exists__chain
     return 1
   }
 
-  unset _delete_chain_name
+  unset _chain_exists__chain
   return 0
 }
 
-_remove_rule() {
-  if "${_ip}" -C "$@" >/dev/null 2>&1; then
-    _log 'Remove rule: %s -D %s' "${_ip}" "$*"
-    "${_ip}" -D "$@" || return 1
-  fi
+_config_error() {
+  _config_error__location="$1"
+  _config_error__message="$2"
 
+  _elog '%s: %s' "${_config_error__location}" "${_config_error__message}"
+
+  unset _config_error__location
+  unset _config_error__message
   return 0
 }
 
-_append_rule_if_not_exists() {
-  if ! "${_ip}" -C "$@" >/dev/null 2>&1; then
-    _log 'Appending new rule: %s -I %s' "${_ip}" "$*"
-    "${_ip}" -A "$@" || return 1
-  fi
-
-  return 0
-}
-
-_insert_rule_if_not_exists() {
-  if ! "${_ip}" -C "$@" >/dev/null 2>&1; then
-    _log 'Inserting new rule: %s -I %s' "${_ip}" "$*"
-    "${_ip}" -I "$@" || return 1
-  fi
-
-  return 0
-}
-
-_erase_chain() {
-  _name="$1"
-
-  _log 'Zeroing chain: %s --zero %s' "${_ip}" "${_name}"
-  "${_ip}" --zero "${_name}" || {
-    unset _name
-    return 1
-  }
-
-  _log 'Flushing chain: %s --flush %s' "${_ip}" "${_name}"
-  "${_ip}" --flush "${_name}" || {
-    unset _name
-    return 1
-  }
-
-  unset _name
-  return 0
-}
-
-_apply_chain_defaults() {
-  # Drop invalid traffic
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -m conntrack --ctstate INVALID -j DROP || return 1
-
-  # Accept related/established traffic
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
-
-  return 0
-}
-
-# DHCPv6 REQUIRES that certain traffic be ALLOWED
-_apply_chain_dhcp6() {
-  # Accept DHCPv6 traffic
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN || return 1
-
-  # Neighbor Discovery
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 135 -j RETURN || return 1
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -p ipv6-icmp --icmpv6-type 136 -j RETURN || return 1
-
-  # Router Advertisement (SLAAC)
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p ipv6-icmp --icmpv6-type 134 -j RETURN || return 1
-
-  # Redirect
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -s fe80::/10 -p ipv6-icmp --icmpv6-type 137 -j RETURN || return 1
-
-  return 0
-}
-
-_prepare_logdrop() {
-  _append_rule_if_not_exists "${_LOGDROP_CHAIN}" -j LOG --log-prefix "[${_CHAIN_NAME}]: " || return 1
-  _append_rule_if_not_exists "${_LOGDROP_CHAIN}" -j DROP || return 1
-
-  return 0
-}
-
-_nomatch_logdrop() {
-  _append_rule_if_not_exists "${_CHAIN_NAME}" -j "${_LOGDROP_CHAIN}" || return 1
-
-  return 0
-}
-
-_source_configs() {
-  if [ -d "${CONFIG_DIR}" ]; then
-    if [ "${_ip}" = "iptables" ]; then
-      # IPv4 allowlist config
-      for _conf in "${CONFIG_DIR}"/*".allow.4"; do
-        # If there were no matching configuration files, do nothing
-        if [ ! -e "${_conf}" ]; then
-          _log 'No configuration for IPv4 Allowlist found.'
-          break
-        fi
-
-        # Otherwise source the config
-        if [ -r "${_conf}" ]; then
-          # Trim out all blank or comment lines
-          # We must read this way from an EOF posix-sh heredoc otherwise
-          # this while-loop happens in a subshell which causes the variable write
-          # to not be saved
-          while IFS="" read -r _i4 || [ -n "${_i4}" ]; do
-            if [ -z "${_ALL_ACCEPT_IP4}" ]; then
-              _ALL_ACCEPT_IP4="${_i4}"
-            else
-              _ALL_ACCEPT_IP4="${_ALL_ACCEPT_IP4} ${_i4}"
-            fi
-            unset _i4
-          done <<EOF
-$(grep -v '^#' "${_conf}")
-EOF
-          unset _i4
-        fi
-
-        unset _conf
-      done
-      unset _conf
-
-      # IPv4 blocklist config
-      for _conf in "${CONFIG_DIR}"/*".block.4"; do
-        # If there were no matching configuration files, do nothing
-        if [ ! -e "${_conf}" ]; then
-          _log 'No configuration for IPv4 Blocklist found.'
-          break
-        fi
-
-        # Otherwise source the config
-        if [ -r "${_conf}" ]; then
-          # Trim out all blank or comment lines
-          # We must read this way from an EOF posix-sh heredoc otherwise
-          # this while-loop happens in a subshell which causes the variable write
-          # to not be saved
-          while IFS="" read -r _i4 || [ -n "${_i4}" ]; do
-            if [ -z "${_ALL_BLOCK_IP4}" ]; then
-              _ALL_BLOCK_IP4="${_i4}"
-            else
-              _ALL_BLOCK_IP4="${_ALL_BLOCK_IP4} ${_i4}"
-            fi
-            unset _i4
-          done <<EOF
-$(grep -v '^#' "${_conf}")
-EOF
-          unset _i4
-        fi
-
-        unset _conf
-      done
-      unset _conf
-    fi
-
-    if [ "${_ip}" = "ip6tables" ]; then
-      # IPv6 allowlist config
-      for _conf in "${CONFIG_DIR}"/*".allow.6"; do
-        # If there were no matching configuration files, do nothing
-        if [ ! -e "${_conf}" ]; then
-          _log 'No configuration for IPv6 Allowlist found.'
-          break
-        fi
-
-        # Otherwise source the config
-        if [ -r "${_conf}" ]; then
-          # Trim out all blank or comment lines
-          # We must read this way from an EOF posix-sh heredoc otherwise
-          # this while-loop happens in a subshell which causes the variable write
-          # to not be saved
-          while IFS="" read -r _i6 || [ -n "${_i6}" ]; do
-            if [ -z "${_ALL_ACCEPT_IP6}" ]; then
-              _ALL_ACCEPT_IP6="${_i6}"
-            else
-              _ALL_ACCEPT_IP6="${_ALL_ACCEPT_IP6} ${_i6}"
-            fi
-            unset _i6
-          done <<EOF
-$(grep -v '^#' "${_conf}")
-EOF
-          unset _i6
-        fi
-
-        unset _conf
-      done
-      unset _conf
-
-      # IPv6 blocklist config
-      for _conf in "${CONFIG_DIR}"/*".block.6"; do
-        # If there were no matching configuration files, do nothing
-        if [ ! -e "${_conf}" ]; then
-          _log 'No configuration for IPv6 Blocklist found.'
-          break
-        fi
-
-        # Otherwise source the config
-        if [ -r "${_conf}" ]; then
-          # Trim out all blank or comment lines
-          # We must read this way from an EOF posix-sh heredoc otherwise
-          # this while-loop happens in a subshell which causes the variable write
-          # to not be saved
-          while IFS="" read -r _i6 || [ -n "${_i6}" ]; do
-            if [ -z "${_ALL_BLOCK_IP6}" ]; then
-              _ALL_BLOCK_IP6="${_i6}"
-            else
-              _ALL_BLOCK_IP6="${_ALL_BLOCK_IP6} ${_i6}"
-            fi
-            unset _i6
-          done <<EOF
-$(grep -v '^#' "${_conf}")
-EOF
-          unset _i6
-        fi
-
-        unset _conf
-      done
-      unset _conf
-    fi
-
-    # Country allowlist config
-    for _conf in "${CONFIG_DIR}"/*".allow.country"; do
-      # If there were no matching configuration files, do nothing
-      if [ "${_conf}" = "${CONFIG_DIR}/*.allow.country" ]; then
-        _log 'No configuration for Country Allowlist found.'
-        break
-      fi
-
-      # Otherwise source the config
-      if [ -r "${_conf}" ]; then
-        # Trim out all blank or comment lines
-        # We must read this way from an EOF posix-sh heredoc otherwise
-        # this while-loop happens in a subshell which causes the variable write
-        # to not be saved
-        while IFS="" read -r _ic || [ -n "${_ic}" ]; do
-          if [ -z "${_ALL_ACCEPT_COUNTRIES}" ]; then
-            _ALL_ACCEPT_COUNTRIES="${_ic}"
-          else
-            _ALL_ACCEPT_COUNTRIES="${_ALL_ACCEPT_COUNTRIES} ${_ic}"
-          fi
-          unset _ic
-        done <<EOF
-$(grep -v '^#' "${_conf}")
-EOF
-        unset _ic
-      fi
-
-      unset _conf
-    done
-    unset _conf
-  fi
-
-  return 0
-}
-
-_prepare_lists() {
-  _ALL_ACCEPT_IP4="${_ACCEPT_IP4}"
-  _ALL_ACCEPT_IP6="${_ACCEPT_IP6}"
-  _ALL_ACCEPT_COUNTRIES="${_ACCEPT_COUNTRIES}"
-
-  _ALL_BLOCK_IP4="${_BLOCK_IP4}"
-  _ALL_BLOCK_IP6="${_BLOCK_IP6}"
-
-  # Read from configuration if they exist
-  _source_configs || {
-    _elog 'Failed to source configuration from %s' "${CONFIG_DIR}"
-    return 1
-  }
-
-  return 0
-}
-
-_apply_blocklist() {
-  if [ "${_ip}" = "iptables" ]; then
-    # Block any bad IPv4 address
-    if [ -n "${_ALL_BLOCK_IP4}" ]; then
-      for _c in ${_ALL_BLOCK_IP4}; do
-        _log 'Block IPv4: %s' "${_c}"
-        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          _elog 'Failed to block IPv4: %s' "${_c}"
-        }
-      done
-    else
-      _log 'No IPv4 addresses to block.'
-    fi
-  fi
-
-  if [ "${_ip}" = "ip6tables" ]; then
-    # Block any bad IPv6 address
-    if [ -n "${_ALL_BLOCK_IP6}" ]; then
-      for _c in ${_ALL_BLOCK_IP6}; do
-        _log 'Block IPv6: %s' "${_c}"
-        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j "${_LOGDROP_CHAIN}" || {
-          _elog 'Failed to block IPv6: %s' "${_c}"
-        }
-      done
-    else
-      _log 'No IPv6 addresses to block.'
-    fi
-  fi
-
-  return 0
-}
-
-_apply_allowlist_ips() {
-  if [ "${_ip}" = "iptables" ]; then
-    # Accept any good IPv4 address
-    if [ -n "${_ALL_ACCEPT_IP4}" ]; then
-      for _c in ${_ALL_ACCEPT_IP4}; do
-        _log 'Allow IPv4: %s' "${_c}"
-        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          _elog 'Failed to allow IPv4: %s' "${_c}"
-        }
-      done
-    else
-      _log 'No IPv4 addresses to allow.'
-    fi
-  fi
-
-  if [ "${_ip}" = "ip6tables" ]; then
-    # Accept any good IPv6 address
-    if [ -n "${_ALL_ACCEPT_IP6}" ]; then
-      for _c in ${_ALL_ACCEPT_IP6}; do
-        _log 'Allow IPv6: %s' "${_c}"
-        _append_rule_if_not_exists "${_CHAIN_NAME}" --source "${_c}" -j RETURN || {
-          _elog 'Failed to allow IPv6: %s' "${_c}"
-        }
-      done
-    else
-      _log 'No IPv6 addresses to allow.'
-    fi
-  fi
-
-  return 0
-}
-
-_apply_allowlist_countries() {
-  # Accept any good countries
-  if [ -n "${_ALL_ACCEPT_COUNTRIES}" ]; then
-    for _c in ${_ALL_ACCEPT_COUNTRIES}; do
-      _log 'Accept traffic from country: %s' "${_c}"
-      _append_rule_if_not_exists "${_CHAIN_NAME}" -m geoip --src-cc "${_c}" -j RETURN || {
-        _elog 'Failed to allow country: %s' "${_c}"
-      }
-    done
-  else
-    _elog '!!! No Countries to allow! You are blocking all traffic !!!'
-  fi
-
-  return 0
-}
-
-_setup_chains() {
-  _prepare_logdrop || {
-    _elog 'Failed to prepare logdrop chain %s' "${_LOGDROP_CHAIN}"
-    return 1
-  }
-
-  _prepare_lists || {
-    _elog 'Failed to prepare IP lists'
-    return 1
-  }
-
-  _apply_chain_defaults || {
-    _elog 'Failed to apply chain defaults %s' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  if [ "${_ip}" = "ip6tables" ]; then
-    _apply_chain_dhcp6 || {
-      _elog 'Failed to apply chain DHCPv6 %s' "${_CHAIN_NAME}"
-      return 1
-    }
-  fi
-
-  _apply_allowlist_ips || {
-    _elog 'Failed applying allowlist IPs to chain %s' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  _apply_blocklist || {
-    _elog 'Failed applying blocklist to chain %s' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  _apply_allowlist_countries || {
-    _elog 'Failed applying allowlist countries to chain %s' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  # Otherwise drop
-  _nomatch_logdrop || {
-    _elog 'Failed final nomatch-logdrop setup for %s' "${_CHAIN_NAME}"
-    return 1
-  }
-
-  return 0
-}
-
-_ensure_chain() {
-  _ensure_chain_name="$1"
-
-  if "${_ip}" --new-chain "${_ensure_chain_name}" >/dev/null 2>&1; then
-    _log 'Create new chain: %s' "${_ensure_chain_name}"
-  else
-    _log 'Refresh existing chain: %s' "${_ensure_chain_name}"
-  fi
-
-  unset _ensure_chain_name
-  return 0
-}
-
-_reset_chains_to_default_state() {
-  _remove_rule INPUT -j "${_CHAIN_NAME}" || return 1
-
-  _erase_chain "${_CHAIN_NAME}" || return 1
-  _erase_chain "${_LOGDROP_CHAIN}" || return 1
-
-  return 0
-}
-
-_iptables_apply() {
-  _apply_opts="$1"
-
-  _ensure_chain "${_CHAIN_NAME}"
-  _ensure_chain "${_LOGDROP_CHAIN}"
-
-  _reset_chains_to_default_state || {
-    unset _apply_opts
-    return 1
-  }
-
-  _setup_chains || {
-    unset _apply_opts
-    return 1
-  }
-
-  # Since we use insert, add these in reverse order
-  _insert_rule_if_not_exists INPUT -j "${_CHAIN_NAME}" || {
-    unset _apply_opts
-    return 1
-  }
-
-  unset _apply_opts
-  return 0
-}
-
-_iptables_clear() {
-  _clear_opts="$1"
-
-  _reset_chains_to_default_state || {
-    unset _clear_opts
-    return 1
-  }
-
-  # Delete chains
-  _delete_chain "${_LOGDROP_CHAIN}" || return 1
-  _delete_chain "${_CHAIN_NAME}" || return 1
-
-  unset _clear_opts
-  return 0
-}
-
-_parse_cmd() {
-  # Global __command exists
-  if [ -z "$1" ]; then
-    _elog 'Must specify one of "apply" "clear"'
-    return 1
-  fi
-
-  case "$1" in
-  "apply" | "clear")
-    __command="$1"
-    ;;
-  *)
-    _elog 'Must specify one of "apply" "clear": %s' "$1"
+_valid_interface() {
+  _valid_interface__iface="$1"
+
+  case "${_valid_interface__iface}" in
+  "" | -* | *+?* | *[!A-Za-z0-9_.+-]*)
+    unset _valid_interface__iface
     return 1
     ;;
   esac
 
+  [ "${#_valid_interface__iface}" -le 15 ] || {
+    unset _valid_interface__iface
+    return 1
+  }
+
+  unset _valid_interface__iface
+  return 0
+}
+
+# Only characters an address can contain, so hostnames and globs never reach iptables-restore
+_valid_address() {
+  _valid_address__address="$1"
+  _valid_address__status=1
+
+  if [ "${__FAMILY}" = "4" ]; then
+    case "${_valid_address__address}" in
+    *[!0-9./]*) ;;
+    *.*) _valid_address__status=0 ;;
+    esac
+  else
+    case "${_valid_address__address}" in
+    *[!0-9A-Fa-f:./]*) ;;
+    *:*) _valid_address__status=0 ;;
+    esac
+  fi
+
+  unset _valid_address__address
+
+  if [ "${_valid_address__status}" -ne 0 ]; then
+    unset _valid_address__status
+    return 1
+  fi
+
+  unset _valid_address__status
+  return 0
+}
+
+_valid_country() {
+  _valid_country__country="$1"
+
+  case "${_valid_country__country}" in
+  [A-Za-z0-9][A-Za-z0-9])
+    unset _valid_country__country
+    return 0
+    ;;
+  esac
+
+  unset _valid_country__country
+  return 1
+}
+
+_add_rule() {
+  _add_rule__iface="$1"
+  _add_rule__rule="$2"
+  _add_rule__target="$3"
+
+  # Funny bash syntax
+  # If $X is set, it expands to the + stuff
+  # otherwise it does not expand
+  _add_rule__entry="-A ${_CHAIN_NAME}"
+  _add_rule__entry="${_add_rule__entry}${_add_rule__iface:+ -i ${_add_rule__iface}}"
+  _add_rule__entry="${_add_rule__entry}${_add_rule__rule:+ ${_add_rule__rule}}"
+  _add_rule__entry="${_add_rule__entry} -j ${_add_rule__target}"
+
+  printf -- '%s\n' "${_add_rule__entry}"
+
+  unset _add_rule__entry
+  unset _add_rule__iface
+  unset _add_rule__rule
+  unset _add_rule__target
+  return 0
+}
+
+_add_address() {
+  _add_address__location="$1"
+  _add_address__target="$2"
+  _add_address__iface="$3"
+  _add_address__address="$4"
+
+  if ! _valid_address "${_add_address__address}"; then
+    _config_error "${_add_address__location}" "invalid IPv${__FAMILY} address: ${_add_address__address}"
+
+    unset _add_address__location
+    unset _add_address__target
+    unset _add_address__iface
+    unset _add_address__address
+    return 1
+  fi
+
+  _add_rule "${_add_address__iface}" "-s ${_add_address__address}" "${_add_address__target}"
+
+  unset _add_address__location
+  unset _add_address__target
+  unset _add_address__iface
+  unset _add_address__address
+  return 0
+}
+
+_add_country() {
+  _add_country__location="$1"
+  _add_country__target="$2"
+  _add_country__iface="$3"
+  _add_country__country="$4"
+  _add_country__status=0
+
+  if ! _valid_country "${_add_country__country}"; then
+    _config_error "${_add_country__location}" "invalid country code: ${_add_country__country}"
+    _add_country__status=1
+  else
+    _add_country__cc="$(printf -- '%s' "${_add_country__country}" | tr '[:lower:]' '[:upper:]')"
+    _add_country__geoip="${GEOIP_DIR}/${_add_country__cc}.iv${__FAMILY}"
+
+    if [ -e "${_add_country__geoip}" ]; then
+      _add_rule "${_add_country__iface}" "-m geoip --src-cc ${_add_country__cc}" "${_add_country__target}"
+    else
+      _config_error "${_add_country__location}" "no GeoIP data for ${_add_country__cc} at ${_add_country__geoip}, run update-geoblock"
+      _add_country__status=1
+    fi
+
+    unset _add_country__cc
+    unset _add_country__geoip
+  fi
+
+  unset _add_country__location
+  unset _add_country__target
+  unset _add_country__iface
+  unset _add_country__country
+
+  if [ "${_add_country__status}" -ne 0 ]; then
+    unset _add_country__status
+    return 1
+  fi
+
+  unset _add_country__status
+  return 0
+}
+
+##
+# Parse a config line in the format "[-i INTERFACE] [VALUE...]"
+#
+# $1 location as FILE:LINE, for error messages
+# $2 kind: allow, block or country
+# $3 rule target
+# $4 line
+##
+_parse_line() {
+  _parse_line__location="$1"
+  _parse_line__kind="$2"
+  _parse_line__target="$3"
+  _parse_line__line="$4"
+
+  _parse_line__iface=""
+  _parse_line__values=""
+  _parse_line__want_iface=""
+  _parse_line__status=0
+
+  for _parse_line__token in ${_parse_line__line}; do
+    if [ -n "${_parse_line__want_iface}" ]; then
+      _parse_line__want_iface=""
+      if _valid_interface "${_parse_line__token}"; then
+        _parse_line__iface="${_parse_line__token}"
+      else
+        _config_error "${_parse_line__location}" "invalid interface: ${_parse_line__token}"
+        _parse_line__status=1
+      fi
+      continue
+    fi
+
+    case "${_parse_line__token}" in
+    -i | --in-interface)
+      if [ -n "${_parse_line__iface}" ]; then
+        _config_error "${_parse_line__location}" "only one interface allowed per line"
+        _parse_line__status=1
+      fi
+      _parse_line__want_iface="1"
+      ;;
+    -*)
+      _config_error "${_parse_line__location}" "unsupported option: ${_parse_line__token}"
+      _parse_line__status=1
+      ;;
+    *)
+      _parse_line__values="${_parse_line__values} ${_parse_line__token}"
+      ;;
+    esac
+  done
+
+  if [ -n "${_parse_line__want_iface}" ]; then
+    _config_error "${_parse_line__location}" "missing interface name"
+    _parse_line__status=1
+  elif [ -n "${_parse_line__values}" ]; then
+    for _parse_line__token in ${_parse_line__values}; do
+      if [ "${_parse_line__kind}" = "country" ]; then
+        _add_country "${_parse_line__location}" "${_parse_line__target}" "${_parse_line__iface}" "${_parse_line__token}" || _parse_line__status=1
+      else
+        _add_address "${_parse_line__location}" "${_parse_line__target}" "${_parse_line__iface}" "${_parse_line__token}" || _parse_line__status=1
+      fi
+    done
+  elif [ -n "${_parse_line__iface}" ]; then
+    if [ "${_parse_line__kind}" = "country" ]; then
+      _config_error "${_parse_line__location}" "missing country code"
+      _parse_line__status=1
+    else
+      _add_rule "${_parse_line__iface}" "" "${_parse_line__target}"
+    fi
+  fi
+
+  unset _parse_line__location
+  unset _parse_line__kind
+  unset _parse_line__target
+  unset _parse_line__line
+  unset _parse_line__iface
+  unset _parse_line__values
+  unset _parse_line__want_iface
+  unset _parse_line__token
+
+  if [ "${_parse_line__status}" -ne 0 ]; then
+    unset _parse_line__status
+    return 1
+  fi
+
+  unset _parse_line__status
+  return 0
+}
+
+##
+# $1 kind: allow, block or country
+# $2 file suffix
+# $3 rule target
+##
+__read_rules() {
+  _read_rules__kind="$1"
+  _read_rules__suffix="$2"
+  _read_rules__target="$3"
+  _read_rules__status=0
+
+  set +f
+  for _read_rules__conf in "${CONFIG_DIR}"/*."${_read_rules__suffix}"; do
+    set -f
+
+    if [ ! -e "${_read_rules__conf}" ]; then
+      break
+    fi
+
+    _read_rules__lineno=0
+    if [ ! -r "${_read_rules__conf}" ]; then
+      _config_error "${_read_rules__conf}:${_read_rules__lineno}" "cannot read file"
+      _read_rules__status=1
+      continue
+    fi
+
+    # We must read this way from an EOF posix-sh heredoc otherwise
+    # this while-loop happens in a subshell which causes the variable write
+    # to not be saved
+    while IFS="" read -r _read_rules__line || [ -n "${_read_rules__line}" ]; do
+      _read_rules__lineno=$((_read_rules__lineno + 1))
+      _parse_line \
+        "${_read_rules__conf}:${_read_rules__lineno}" \
+        "${_read_rules__kind}" \
+        "${_read_rules__target}" \
+        "${_read_rules__line%%#*}" || _read_rules__status=1
+    done <<EOF
+$(tr -d '\r' <"${_read_rules__conf}")
+EOF
+  done
+  set -f
+
+  unset _read_rules__kind
+  unset _read_rules__suffix
+  unset _read_rules__target
+  unset _read_rules__conf
+  unset _read_rules__line
+  unset _read_rules__lineno
+
+  if [ "${_read_rules__status}" -ne 0 ]; then
+    unset _read_rules__status
+    return 1
+  fi
+
+  unset _read_rules__status
+  return 0
+}
+
+##
+# Print rules for every CONFIG_DIR/*.SUFFIX file
+#
+# $1 kind: allow, block or country
+# $2 file suffix
+# $3 rule target
+##
+_config_rules() {
+  _config_rules__kind="$1"
+  _config_rules__suffix="$2"
+  _config_rules__target="$3"
+
+  _config_rules__rules="$(__read_rules "${_config_rules__kind}" "${_config_rules__suffix}" "${_config_rules__target}")" || {
+    unset _config_rules__kind
+    unset _config_rules__suffix
+    unset _config_rules__target
+    unset _config_rules__rules
+    return 1
+  }
+
+  # Dedupe using awk :)
+  if [ -n "${_config_rules__rules}" ]; then
+    printf -- '%s\n' "${_config_rules__rules}" | awk '!seen[$0]++'
+  fi
+
+  unset _config_rules__kind
+  unset _config_rules__suffix
+  unset _config_rules__target
+  unset _config_rules__rules
+  return 0
+}
+
+##
+# Handle a ruleset
+# $1 allow IPs
+# $2 block IPs
+# $3 countries
+# $4 apply the jump rule
+_ruleset() {
+  _ruleset__allow="$1"
+  _ruleset__block="$2"
+  _ruleset__countries="$3"
+  _ruleset__jump="$4"
+
+  _ruleset__payload="*filter
+:${_CHAIN_NAME} - [0:0]
+:${_LOGDROP_CHAIN} - [0:0]
+-A ${_LOGDROP_CHAIN} -m limit --limit 5/min --limit-burst 10 -j LOG --log-prefix \"[${_CHAIN_NAME}]: \"
+-A ${_LOGDROP_CHAIN} -j DROP
+-A ${_CHAIN_NAME} -m conntrack --ctstate INVALID -j DROP
+-A ${_CHAIN_NAME} -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+-A ${_CHAIN_NAME} -i lo -j RETURN"
+
+  # DHCPv6 and Neighbor Discovery REQUIRE that certain traffic be ALLOWED
+  if [ "${__FAMILY}" = "6" ]; then
+    _ruleset__payload="${_ruleset__payload}
+-A ${_CHAIN_NAME} -s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN
+-A ${_CHAIN_NAME} -p ipv6-icmp --icmpv6-type 135 -j RETURN
+-A ${_CHAIN_NAME} -p ipv6-icmp --icmpv6-type 136 -j RETURN
+-A ${_CHAIN_NAME} -s fe80::/10 -p ipv6-icmp --icmpv6-type 134 -j RETURN
+-A ${_CHAIN_NAME} -s fe80::/10 -p ipv6-icmp --icmpv6-type 137 -j RETURN"
+  fi
+
+  for _ruleset__section in "${_ruleset__allow}" "${_ruleset__block}" "${_ruleset__countries}"; do
+    if [ -n "${_ruleset__section}" ]; then
+      _ruleset__payload="${_ruleset__payload}
+${_ruleset__section}"
+    fi
+  done
+
+  _ruleset__payload="${_ruleset__payload}
+-A ${_CHAIN_NAME} -j ${_LOGDROP_CHAIN}"
+
+  if [ -n "${_ruleset__jump}" ]; then
+    _ruleset__payload="${_ruleset__payload}
+${_ruleset__jump}"
+  fi
+
+  _ruleset__payload="${_ruleset__payload}
+COMMIT"
+
+  printf -- '%s\n' "${_ruleset__payload}"
+
+  unset _ruleset__allow
+  unset _ruleset__block
+  unset _ruleset__countries
+  unset _ruleset__jump
+  unset _ruleset__section
+  unset _ruleset__payload
+  return 0
+}
+
+_iptables_apply() {
+  _iptables_apply__allow="$(_config_rules allow "allow.${__FAMILY}" RETURN)" || {
+    _elog 'Invalid IPv%s allowlist in %s. Existing rules left unchanged.' "${__FAMILY}" "${CONFIG_DIR}"
+    unset _iptables_apply__allow
+    return 1
+  }
+
+  _iptables_apply__block="$(_config_rules block "block.${__FAMILY}" "${_LOGDROP_CHAIN}")" || {
+    _elog 'Invalid IPv%s blocklist in %s. Existing rules left unchanged.' "${__FAMILY}" "${CONFIG_DIR}"
+    unset _iptables_apply__allow
+    unset _iptables_apply__block
+    return 1
+  }
+
+  _iptables_apply__countries="$(_config_rules country "allow.country" RETURN)" || {
+    _elog 'Invalid country allowlist in %s. Existing rules left unchanged.' "${CONFIG_DIR}"
+    unset _iptables_apply__allow
+    unset _iptables_apply__block
+    unset _iptables_apply__countries
+    return 1
+  }
+
+  if [ -z "${_iptables_apply__countries}" ]; then
+    _elog '!!! No Countries to allow! You are blocking all traffic !!!'
+  fi
+
+  _iptables_apply__jump=""
+  if ! _ipt -C INPUT -j "${_CHAIN_NAME}" >/dev/null 2>&1; then
+    _iptables_apply__jump="-I INPUT -j ${_CHAIN_NAME}"
+  fi
+
+  _iptables_apply__payload="$(_ruleset "${_iptables_apply__allow}" "${_iptables_apply__block}" "${_iptables_apply__countries}" "${_iptables_apply__jump}")"
+  unset _iptables_apply__allow
+  unset _iptables_apply__block
+  unset _iptables_apply__countries
+  unset _iptables_apply__jump
+
+  _log 'Applying ruleset with %s-restore:' "${__IPTABLES}"
+  printf -- '%s\n' "${_iptables_apply__payload}"
+
+  printf -- '%s\n' "${_iptables_apply__payload}" | "${__IPTABLES}-restore" -w --noflush || {
+    _elog 'Failed to apply ruleset. Existing rules left unchanged.'
+    unset _iptables_apply__payload
+    return 1
+  }
+
+  unset _iptables_apply__payload
+  return 0
+}
+
+_iptables_clear() {
+  while _ipt -C INPUT -j "${_CHAIN_NAME}" >/dev/null 2>&1; do
+    _log 'Remove rule: %s -D INPUT -j %s' "${__IPTABLES}" "${_CHAIN_NAME}"
+    _ipt -D INPUT -j "${_CHAIN_NAME}" || return 1
+  done
+
+  for _iptables_clear__chain in "${_CHAIN_NAME}" "${_LOGDROP_CHAIN}"; do
+    if _chain_exists "${_iptables_clear__chain}"; then
+      _log 'Flushing chain: %s --flush %s' "${__IPTABLES}" "${_iptables_clear__chain}"
+      _ipt --flush "${_iptables_clear__chain}" || {
+        unset _iptables_clear__chain
+        return 1
+      }
+    fi
+  done
+
+  for _iptables_clear__chain in "${_CHAIN_NAME}" "${_LOGDROP_CHAIN}"; do
+    if _chain_exists "${_iptables_clear__chain}"; then
+      _log 'Delete chain: %s --delete-chain %s' "${__IPTABLES}" "${_iptables_clear__chain}"
+      _ipt --delete-chain "${_iptables_clear__chain}" || {
+        unset _iptables_clear__chain
+        return 1
+      }
+    fi
+  done
+
+  unset _iptables_clear__chain
+  return 0
+}
+
+_parse_cmd() {
+  _parse_cmd__command="$1"
+
+  if [ -z "${_parse_cmd__command}" ]; then
+    _elog 'Must specify one of "apply" "clear"'
+    unset _parse_cmd__command
+    return 1
+  fi
+
+  case "${_parse_cmd__command}" in
+  "apply" | "clear") ;;
+  *)
+    _elog 'Must specify one of "apply" "clear": %s' "${_parse_cmd__command}"
+    unset _parse_cmd__command
+    return 1
+    ;;
+  esac
+
+  unset _parse_cmd__command
   return 0
 }
 
 _exec_cmd() {
-  _cmd="$1"
-  _opts="$2"
+  _exec_cmd__command="$1"
 
-  if [ -z "${_cmd}" ]; then
-    _elog 'Must specify one of "apply" "clear"'
-    _usage || return 1
-
-    unset _cmd
-    unset _opts
-    return 1
-  fi
-
-  if [ "${_cmd}" = "apply" ]; then
-    _iptables_apply "${_opts}" || {
-      _elog 'Failed to apply iptables rules. Clean up and exit(1)'
-      _iptables_clear "${_opts}" || return 1
+  case "${_exec_cmd__command}" in
+  apply)
+    _iptables_apply || {
+      _elog 'Failed to apply iptables rules.'
+      unset _exec_cmd__command
       return 1
     }
-  elif [ "${_cmd}" = "clear" ]; then
-    _iptables_clear "${_opts}" || return 1
-  else
-    _elog 'Unknown execute command: %s (%s)' "${_cmd}" "${_opts}"
-    _usage || return 1
+    ;;
+  clear)
+    _iptables_clear || {
+      _elog 'Failed to clear iptables rules.'
+      unset _exec_cmd__command
+      return 1
+    }
+    ;;
+  *)
+    _elog 'Unknown execute command: %s' "${_exec_cmd__command}"
+    _usage
 
-    unset _cmd
-    unset _opts
+    unset _exec_cmd__command
     return 1
-  fi
+    ;;
+  esac
 
-  unset _cmd
-  unset _opts
+  unset _exec_cmd__command
   return 0
 }
 
 _parse_ipv() {
-  if [ -z "$1" ]; then
+  _parse_ipv__family="$1"
+
+  if [ -z "${_parse_ipv__family}" ]; then
     _elog 'Must specify one of "4" "6"'
+    unset _parse_ipv__family
     return 1
   fi
 
-  if [ "$1" = "4" ]; then
-    _ip="iptables"
-  elif [ "$1" = "6" ]; then
-    _ip="ip6tables"
-  else
-    _elog 'Must specify one of "4" "6": %s' "$1"
+  case "${_parse_ipv__family}" in
+  "4")
+    __IPTABLES="iptables"
+    ;;
+  "6")
+    __IPTABLES="ip6tables"
+    ;;
+  *)
+    _elog 'Must specify one of "4" "6": %s' "${_parse_ipv__family}"
+    unset _parse_ipv__family
     return 1
-  fi
+    ;;
+  esac
 
-  # Check exists
-  if ! command -v "${_ip}" >/dev/null; then
-    _elog 'Must have "%s" installed.' "${_ip}"
-    return 1
-  fi
+  __FAMILY="${_parse_ipv__family}"
+  unset _parse_ipv__family
+
+  for _parse_ipv__bin in "${__IPTABLES}" "${__IPTABLES}-restore"; do
+    if ! command -v "${_parse_ipv__bin}" >/dev/null 2>&1; then
+      _elog 'Must have "%s" installed.' "${_parse_ipv__bin}"
+      unset _parse_ipv__bin
+      return 1
+    fi
+  done
+  unset _parse_ipv__bin
 
   # Do not touch!
-  readonly _ip
+  readonly __IPTABLES
+  readonly __FAMILY
   return 0
 }
 
@@ -627,36 +675,57 @@ EOF
 }
 
 main() {
+  main__family="$1"
+  main__command="$2"
+
   if [ "$(id -u)" -ne 0 ]; then
     _elog 'Must run as root.'
-    _usage || return 1
+    _usage
+    unset main__family
+    unset main__command
     return 1
   fi
 
-  # We need grep
-  if ! command -v "grep" >/dev/null; then
-    _elog 'Must have "grep" installed.'
-    _usage || return 1
-    return 1
+  if ! command -v "tr" >/dev/null 2>&1; then
+    _elog 'Must have "tr" installed.'
+    _usage
+    unset main__family
+    unset main__command
+    return 2
   fi
 
-  _parse_ipv "$1" || {
-    _usage || return 1
-    return 1
-  }
-  shift
+  if ! command -v "awk" >/dev/null 2>&1; then
+    _elog 'Must have "awk" installed.'
+    _usage
+    unset main__family
+    unset main__command
+    return 2
+  fi
 
-  __command=""
-  _parse_cmd "$1" || {
-    _usage || return 1
-    return 1
-  }
-  shift
+  if ! _parse_ipv "${main__family}"; then
+    _usage
+    unset main__family
+    unset main__command
+    return 3
+  fi
 
-  _exec_cmd "${__command}" "$@" || return 1
+  unset main__family
+
+  if ! _parse_cmd "${main__command}"; then
+    _usage
+    unset main__command
+    return 3
+  fi
+
+  if ! _exec_cmd "${main__command}"; then
+    unset main__command
+    return 3
+  fi
+
+  unset main__command
 
   return 0
 }
 
-main "$@" || exit 1
-exit 0
+main "$@"
+exit "$?"

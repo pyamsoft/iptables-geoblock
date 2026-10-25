@@ -25,7 +25,7 @@ main() {
     --pkglicense "GPL2" \
     --maintainer "pyamsoft" \
     --provides "iptables-geoblock" \
-    --requires "iptables,grep,xtables-addons-dkms"
+    --requires "iptables,xtables-addons-dkms"
 
   unset _version
   return 0
